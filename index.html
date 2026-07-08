@@ -1486,7 +1486,7 @@ async function apriImpostazioni(){
         conRetry(()=> sb.from('config').select('*').eq('id',1).single()),
       ]);
       const backup = { esercizi: es.data, log_sessioni: log.data, prescrizioni: presc.data, config: cfg.data, esportato_il: new Date().toISOString() };
-      await condividiOScarica(`diario_backup_${oggiISO()}.json`, JSON.stringify(backup, null, 2), 'application/json');
+      await condividiOScarica(`diario_backup.json`, JSON.stringify(backup, null, 2), 'application/json');
     }catch(e){ alert('Errore export: '+(e.message||e)); }
   };
   document.getElementById('cScaricaTxt').onclick = async ()=>{
@@ -1515,7 +1515,7 @@ async function apriImpostazioni(){
         const dettagli = v.peso!=null ? `${v.peso}kg × ${v.serie ?? '?'}×${v.ripetizioni ?? '?'}` : (v.rpe!=null ? `RPE ${v.rpe}/10` : (v.fatto ? 'fatto' : 'non fatto'));
         righe.push(`${v.data} · ${v.esercizi?.nome || '—'} · ${dettagli}${v.nota ? ' · nota: '+v.nota : ''}`);
       });
-      await condividiOScarica(`diario_riepilogo_${oggiISO()}.txt`, righe.join('\n'), 'text/plain');
+      await condividiOScarica(`diario_riepilogo.txt`, righe.join('\n'), 'text/plain');
     }catch(e){ alert('Errore export: '+(e.message||e)); }
   };
   document.getElementById('cMostraImporta').onclick = ()=>{
