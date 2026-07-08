@@ -1,0 +1,1587 @@
+<!DOCTYPE html>
+<html lang="it">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Diario Allenamento</title>
+
+<!-- PWA: manifest + tema -->
+<link rel="manifest" href="manifest.json">
+<meta name="theme-color" content="#1C1F22">
+
+<!-- PWA iOS: l'installabilità su iOS dipende da QUESTI meta tag, non dal service worker -->
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="Diario">
+<link rel="apple-touch-icon" href="apple-touch-icon.png">
+<link rel="icon" href="icon-192.png">
+
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Barlow+Condensed:wght@500;600;700&family=Inter:wght@400;500;600&display=swap" rel="stylesheet">
+
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+
+<style>
+/* ============================================================
+   DESIGN TOKENS — stessa famiglia estetica del Calcolatore carichi
+   ============================================================ */
+:root{
+  --ardesia:#1C1F22;
+  --ardesia-alta:#24282C;
+  --ardesia-bordo:#33383D;
+  --magnesite:#F2EFE9;
+  --magnesite-attenuata:#B9B6AF;
+  --arancio:#E8622C;
+  --muschio:#5B7A6E;
+  --roccia:#3E6B8A;
+  --rosso:#B3261E;
+  --font-display:'Barlow Condensed', sans-serif;
+  --font-body:'Inter', sans-serif;
+  --radius:10px;
+}
+
+*{box-sizing:border-box;}
+html,body{height:100%;}
+body{
+  margin:0;
+  background:var(--ardesia);
+  color:var(--magnesite);
+  font-family:var(--font-body);
+  -webkit-font-smoothing:antialiased;
+  padding-bottom:calc(64px + env(safe-area-inset-bottom));
+}
+h1,h2,h3,.numero{
+  font-family:var(--font-display);
+  font-weight:600;
+  letter-spacing:0.01em;
+}
+button{
+  font-family:var(--font-body);
+  cursor:pointer;
+}
+button:focus-visible, input:focus-visible, select:focus-visible, textarea:focus-visible, a:focus-visible{
+  outline:2px solid var(--arancio);
+  outline-offset:2px;
+}
+@media (prefers-reduced-motion: reduce){
+  *{animation-duration:0.001ms !important; transition-duration:0.001ms !important;}
+}
+
+/* Header */
+.topbar{
+  position:sticky; top:0; z-index:20;
+  display:flex; align-items:center; justify-content:space-between;
+  padding:14px 16px calc(10px + env(safe-area-inset-top));
+  padding-top:calc(14px + env(safe-area-inset-top));
+  background:var(--ardesia);
+  border-bottom:1px solid var(--ardesia-bordo);
+}
+.topbar h1{font-size:22px; margin:0; color:var(--magnesite);}
+.stato-connessione{
+  display:flex; align-items:center; gap:6px; font-size:12px; color:var(--magnesite-attenuata);
+}
+.puntino{width:8px; height:8px; border-radius:50%; background:var(--muschio);}
+.puntino.offline{background:var(--rosso);}
+.icona-btn{
+  background:none; border:none; color:var(--magnesite); font-size:20px; padding:6px;
+  border-radius:8px; line-height:1;
+}
+.icona-btn:hover{background:var(--ardesia-alta);}
+
+/* Layout viste */
+main{padding:16px; max-width:640px; margin:0 auto;}
+.vista{display:none;}
+.vista.attiva{display:block;}
+
+.card{
+  background:var(--ardesia-alta);
+  border:1px solid var(--ardesia-bordo);
+  border-radius:var(--radius);
+  padding:14px;
+  margin-bottom:12px;
+}
+.card h3{margin:0 0 8px; font-size:17px;}
+
+.riga-form{display:flex; flex-direction:column; gap:4px; margin-bottom:12px;}
+.riga-form label{font-size:13px; color:var(--magnesite-attenuata);}
+input, select, textarea{
+  background:var(--ardesia);
+  border:1px solid var(--ardesia-bordo);
+  color:var(--magnesite);
+  border-radius:8px;
+  padding:10px 12px;
+  font-size:15px;
+  font-family:var(--font-body);
+}
+input:disabled, select:disabled{opacity:0.5;}
+textarea{resize:vertical; min-height:60px;}
+
+.btn{
+  border:none; border-radius:8px; padding:11px 16px; font-size:15px; font-weight:600;
+  background:var(--roccia); color:var(--magnesite);
+}
+.btn.primario{background:var(--arancio);}
+.btn.secondario{background:transparent; border:1px solid var(--ardesia-bordo); color:var(--magnesite);}
+.btn.pericolo{background:var(--rosso);}
+.btn.blocco{width:100%;}
+.btn:disabled{opacity:0.45; cursor:not-allowed;}
+
+.badge{
+  display:inline-block; font-size:11px; padding:2px 8px; border-radius:20px;
+  background:var(--roccia); color:var(--magnesite);
+}
+.badge.scheda{background:var(--muschio);}
+
+.vuoto{
+  text-align:center; color:var(--magnesite-attenuata); padding:32px 12px; font-size:14px;
+}
+
+/* Diario */
+.blocco-giorno{
+  border-left:3px solid var(--colore-giorno, var(--ardesia-bordo));
+  padding-left:10px;
+  margin:0 0 20px;
+}
+.blocco-giorno:first-child{margin-top:2px;}
+.intestazione-giorno{
+  display:inline-flex; align-items:center; gap:6px;
+  font-family:var(--font-display); font-size:13px; font-weight:600;
+  color:var(--magnesite); background:var(--colore-giorno, var(--ardesia-bordo));
+  text-transform:uppercase; letter-spacing:0.04em;
+  padding:3px 6px 3px 10px; border-radius:20px;
+  margin:0 0 8px;
+}
+.btn-piu-giorno{
+  width:18px; height:18px; border-radius:50%; border:none; cursor:pointer;
+  background:rgba(0,0,0,0.18); color:var(--magnesite); font-size:13px; line-height:1;
+  display:flex; align-items:center; justify-content:center; padding:0;
+}
+.btn-piu-giorno:hover{background:rgba(0,0,0,0.32);}
+.intestazione-categoria{
+  font-family:var(--font-display); font-size:15px; font-weight:600;
+  color:var(--magnesite); text-transform:uppercase; letter-spacing:0.04em;
+  margin:18px 2px 8px; display:flex; align-items:center; gap:8px;
+}
+.intestazione-categoria:first-child{margin-top:2px;}
+.pallino-categoria{width:10px; height:10px; border-radius:50%; flex-shrink:0; display:inline-block;}
+.griglia-colori{display:flex; flex-wrap:wrap; gap:8px; padding:4px 0;}
+.swatch-colore{
+  width:32px; height:32px; border-radius:50%; border:2px solid transparent; padding:0;
+}
+.swatch-colore.selezionato{border-color:var(--magnesite);}
+.voce-log{display:flex; justify-content:space-between; align-items:flex-start; gap:8px;}
+.voce-log .dettagli{flex:1;}
+.voce-log .data-num{font-family:var(--font-display); font-size:20px; color:var(--arancio); min-width:52px;}
+.voce-log .azioni{display:flex; gap:4px;}
+.voce-log .nota{font-size:13px; color:var(--magnesite-attenuata); margin-top:4px; font-style:italic;}
+
+/* Griglia aderenza */
+.tabella-griglia{width:100%; border-collapse:collapse; font-size:12px;}
+.tabella-griglia th{
+  font-weight:500; color:var(--magnesite-attenuata); padding:4px 2px; text-align:center;
+}
+.tabella-griglia td{padding:4px 2px; text-align:center; border-top:1px solid var(--ardesia-bordo);}
+.tabella-griglia .nome-esercizio{text-align:left; padding-right:8px;}
+.stato-cella{
+  display:inline-block; padding:4px 8px; border-radius:8px; font-size:11px; font-weight:600; color:var(--ardesia);
+  white-space:nowrap;
+}
+
+/* Grafici */
+.toggle-periodo{display:flex; gap:8px; margin-bottom:12px;}
+.toggle-periodo button{flex:1;}
+.toggle-periodo button.attivo{background:var(--arancio); color:var(--magnesite);}
+.grafico-svg{width:100%; height:auto; display:block;}
+.etichetta-parziale{font-size:11px; fill:var(--magnesite-attenuata);}
+
+/* Scheda */
+.nav-settimana{display:flex; align-items:center; justify-content:space-between; margin-bottom:14px;}
+.nav-settimana .numero{font-size:19px;}
+
+/* Tab bar inferiore */
+.tabbar{
+  position:fixed; bottom:0; left:0; right:0; z-index:20;
+  display:flex;
+  background:var(--ardesia-alta);
+  border-top:1px solid var(--ardesia-bordo);
+  padding-bottom:env(safe-area-inset-bottom);
+}
+.tab-btn{
+  flex:1; background:none; border:none; color:var(--magnesite-attenuata);
+  display:flex; flex-direction:column; align-items:center; gap:2px;
+  padding:9px 4px 8px; font-size:11px;
+}
+.tab-btn .ic{font-size:19px;}
+.tab-btn.attivo{color:var(--arancio);}
+
+/* Modale */
+.overlay{
+  position:fixed; inset:0; background:rgba(0,0,0,0.55); z-index:30;
+  display:none; align-items:flex-end; justify-content:center;
+}
+.overlay.aperto{display:flex;}
+.modale{
+  background:var(--ardesia-alta); width:100%; max-width:640px;
+  border-radius:16px 16px 0 0; padding:18px 16px calc(18px + env(safe-area-inset-bottom));
+  max-height:88vh; overflow-y:auto;
+}
+.modale h2{margin:0 0 14px; font-size:19px;}
+.avviso-box{
+  background:rgba(232,98,44,0.12); border:1px solid var(--arancio); border-radius:8px;
+  padding:10px 12px; font-size:13px; margin-bottom:12px;
+}
+.errore-box{
+  background:rgba(179,38,30,0.15); border:1px solid var(--rosso); border-radius:8px;
+  padding:10px 12px; font-size:13px; margin-bottom:12px;
+}
+
+.legenda{display:flex; gap:12px; flex-wrap:wrap; font-size:11px; color:var(--magnesite-attenuata); margin-top:10px;}
+.legenda span{display:flex; align-items:center; gap:4px;}
+.legenda i{width:10px; height:10px; border-radius:50%; display:inline-block;}
+</style>
+</head>
+<body>
+
+<div class="topbar">
+  <h1>Diario Allenamento</h1>
+  <div style="display:flex; align-items:center; gap:10px;">
+    <div class="stato-connessione"><span class="puntino" id="puntinoConnessione"></span><span id="testoConnessione">online</span></div>
+    <button class="icona-btn" id="btnImpostazioni" aria-label="Impostazioni">&#9881;</button>
+  </div>
+</div>
+
+<div id="bannerBackup" style="display:none;"></div>
+
+<main>
+
+  <!-- ============ VISTA 1: DIARIO ============ -->
+  <section class="vista attiva" id="vista-diario">
+    <button class="btn primario blocco" id="btnNuovaSessione" style="margin-bottom:14px;">+ Nuova sessione</button>
+    <div id="listaLog"><div class="vuoto">Caricamento…</div></div>
+  </section>
+
+  <!-- ============ VISTA 2: GRIGLIA ============ -->
+  <section class="vista" id="vista-griglia">
+    <div class="card">
+      <h3>Aderenza</h3>
+      <div id="contenutoGriglia"><div class="vuoto">Caricamento…</div></div>
+      <div class="legenda">
+        <span><i style="background:var(--muschio)"></i> in regola</span>
+        <span><i style="background:var(--arancio)"></i> in ritardo</span>
+        <span><i style="background:var(--rosso)"></i> molto in ritardo</span>
+        <span><i style="background:var(--roccia)"></i> mai fatto</span>
+      </div>
+    </div>
+  </section>
+
+  <!-- ============ VISTA 3: GRAFICI ============ -->
+  <section class="vista" id="vista-grafici">
+    <div class="card">
+      <div class="riga-form">
+        <label for="selectEsercizioGrafico">Esercizio</label>
+        <select id="selectEsercizioGrafico"></select>
+      </div>
+      <div class="toggle-periodo">
+        <button class="btn secondario attivo" id="btnPeriodoSettimana">Settimana</button>
+        <button class="btn secondario" id="btnPeriodoMese">Mese</button>
+      </div>
+      <div id="contenutoGrafici"><div class="vuoto">Seleziona un esercizio di tipo "carico"</div></div>
+    </div>
+  </section>
+
+  <!-- ============ VISTA 4: MACROCICLO (ex Scheda, ora dedicata a Trazioni) ============ -->
+  <section class="vista" id="vista-scheda">
+    <div id="selettoreMacrociclo" style="margin-bottom:12px;"></div>
+    <div id="contenutoMacrociclo"><div class="vuoto">Caricamento…</div></div>
+  </section>
+
+  <!-- ============ VISTA 5: LIBRERIA ============ -->
+  <section class="vista" id="vista-libreria">
+    <div class="toggle-periodo">
+      <button class="btn secondario attivo" id="btnFiltroAttivi">Attivi</button>
+      <button class="btn secondario" id="btnFiltroArchiviati">Archiviati</button>
+    </div>
+    <div style="display:flex; gap:8px; margin-bottom:14px;">
+      <button class="btn primario" style="flex:1" id="btnNuovoEsercizio">+ Nuovo esercizio</button>
+      <button class="btn secondario" id="btnGestisciCategorie">Categorie</button>
+    </div>
+    <div id="listaEsercizi"><div class="vuoto">Caricamento…</div></div>
+  </section>
+
+</main>
+
+<nav class="tabbar">
+  <button class="tab-btn attivo" data-view="diario"><span class="ic">&#9998;</span>Diario</button>
+  <button class="tab-btn" data-view="griglia"><span class="ic">&#9638;</span>Griglia</button>
+  <button class="tab-btn" data-view="grafici"><span class="ic">&#128200;</span>Grafici</button>
+  <button class="tab-btn" data-view="scheda"><span class="ic">&#128196;</span>Macrociclo</button>
+  <button class="tab-btn" data-view="libreria"><span class="ic">&#128218;</span>Libreria</button>
+</nav>
+
+<!-- ============ OVERLAY GENERICO PER MODALI ============ -->
+<div class="overlay" id="overlay">
+  <div class="modale" id="contenutoModale"></div>
+</div>
+
+<script>
+/* ============================================================
+   CONFIGURAZIONE — da compilare dopo la creazione del progetto Supabase
+   ============================================================ */
+const SUPABASE_URL = 'https://zqiodtllewdyulrppaym.supabase.co';
+const SUPABASE_ANON_KEY = 'sb_publishable_eKnMD4oUHIuLqI69XKzMOg_2mmANFFX';
+
+const sb = supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
+
+/* ============================================================
+   COSTANTI — soglie gradiente griglia di aderenza (commentate)
+   ratio = giorni_trascorsi_dall_ultimo_log / target_giorni
+   ratio <= 1        -> interpola MUSCHIO -> ARANCIO
+   1 < ratio <= 2     -> interpola ARANCIO -> ROSSO
+   ratio > 2          -> ROSSO pieno (clamp)
+   nessun log mai     -> colore dedicato ROCCIA (stato "mai fatto")
+   ============================================================ */
+const SOGLIA_ROSSO_PIENO = 2.0;
+const COLORE_MUSCHIO = [91, 122, 110];
+const COLORE_OCRA    = [201, 162, 39];
+const COLORE_ARANCIO = [232, 98, 44];
+const COLORE_ROSSO   = [179, 38, 30];
+const COLORE_ROCCIA  = [62, 107, 138];
+const TIMEZONE = 'Europe/Rome';
+
+/* ============================================================
+   UTILITY: date/fuso orario Europe/Rome (hardcoded)
+   ============================================================ */
+function oggiISO(){
+  const fmt = new Intl.DateTimeFormat('en-CA', { timeZone: TIMEZONE, year:'numeric', month:'2-digit', day:'2-digit' });
+  return fmt.format(new Date());
+}
+function dataDaISO(s){ const [y,m,d]=s.split('-').map(Number); return new Date(Date.UTC(y,m-1,d)); }
+function isoDaData(d){ return d.toISOString().slice(0,10); }
+function aggiungiGiorni(iso, n){ const d=dataDaISO(iso); d.setUTCDate(d.getUTCDate()+n); return isoDaData(d); }
+function differenzaGiorni(a,b){ return Math.round((dataDaISO(b)-dataDaISO(a))/86400000); }
+function lunediSettimana(iso){
+  const d = dataDaISO(iso);
+  const gs = d.getUTCDay();
+  const offset = gs === 0 ? 6 : gs - 1;
+  d.setUTCDate(d.getUTCDate()-offset);
+  return isoDaData(d);
+}
+function primoGiornoMese(iso){ return iso.slice(0,7)+'-01'; }
+function formattaBreve(iso){ const d=dataDaISO(iso); return `${String(d.getUTCDate()).padStart(2,'0')}/${String(d.getUTCMonth()+1).padStart(2,'0')}`; }
+
+/* ============================================================
+   UTILITY: retry + timeout per chiamate Supabase
+   ============================================================ */
+async function conRetry(fnPromiseFactory, tentativi=3, timeoutMs=8000){
+  let ultimoErrore;
+  for(let i=0;i<tentativi;i++){
+    try{
+      const risultato = await Promise.race([
+        fnPromiseFactory(),
+        new Promise((_,rej)=>setTimeout(()=>rej(new Error('timeout')), timeoutMs))
+      ]);
+      if(risultato && risultato.error) throw risultato.error;
+      impostaConnessione(true);
+      return risultato;
+    }catch(e){
+      ultimoErrore = e;
+      await new Promise(r=>setTimeout(r, 400*(i+1)));
+    }
+  }
+  impostaConnessione(false);
+  throw ultimoErrore;
+}
+function impostaConnessione(ok){
+  document.getElementById('puntinoConnessione').classList.toggle('offline', !ok);
+  document.getElementById('testoConnessione').textContent = ok ? 'online' : 'connessione assente';
+}
+
+/* ============================================================
+   STATO GLOBALE
+   ============================================================ */
+const stato = {
+  vistaCorrente: 'diario',
+  esercizi: [],
+  categorie: [],
+  filtroLibreria: 'attivi',
+  macrocicloSelezionatoId: null,
+  periodoGrafico: 'settimana',
+};
+
+/* Palette fissa coerente con lo stile dell'app, tra cui scegliere il colore
+   quando si crea una nuova categoria di esercizi. */
+const PALETTE_CATEGORIE = [
+  { nome:'Arancio', valore:'#E8622C' },
+  { nome:'Muschio', valore:'#5B7A6E' },
+  { nome:'Roccia',  valore:'#3E6B8A' },
+  { nome:'Viola',   valore:'#8A6FA3' },
+  { nome:'Ocra',    valore:'#C9A227' },
+  { nome:'Mattone', valore:'#B3624A' },
+  { nome:'Petrolio',valore:'#2E5F5D' },
+  { nome:'Grigio caldo', valore:'#8C8478' },
+];
+
+/* ============================================================
+   CARICAMENTO ESERCIZI E CATEGORIE (usato in più viste)
+   ============================================================ */
+async function caricaEsercizi(){
+  const [rEs, rCat] = await Promise.all([
+    conRetry(()=> sb.from('esercizi').select('*').eq('eliminato', false).order('nome')),
+    conRetry(()=> sb.from('categorie').select('*').order('nome')),
+  ]);
+  stato.esercizi = rEs.data || [];
+  stato.categorie = rCat.data || [];
+  return stato.esercizi;
+}
+function esercizioPerId(id){ return stato.esercizi.find(e=>e.id===id); }
+function categoriaPerId(id){ return stato.categorie.find(c=>c.id===id); }
+
+/* ============================================================
+   GESTIONE VISTE / TAB
+   ============================================================ */
+document.querySelectorAll('.tab-btn').forEach(btn=>{
+  btn.addEventListener('click', ()=> mostraVista(btn.dataset.view));
+});
+function mostraVista(nome){
+  stato.vistaCorrente = nome;
+  document.querySelectorAll('.vista').forEach(v=>v.classList.remove('attiva'));
+  document.querySelectorAll('.tab-btn').forEach(b=>b.classList.toggle('attivo', b.dataset.view===nome));
+  document.getElementById('vista-'+nome).classList.add('attiva');
+  if(nome==='diario') renderDiario();
+  if(nome==='griglia') renderGriglia();
+  if(nome==='grafici') renderGrafici();
+  if(nome==='scheda') renderScheda();
+  if(nome==='libreria') renderLibreria();
+}
+
+/* ============================================================
+   MODALE GENERICO
+   ============================================================ */
+const overlay = document.getElementById('overlay');
+const contenutoModale = document.getElementById('contenutoModale');
+function apriModale(html){ contenutoModale.innerHTML = html; overlay.classList.add('aperto'); }
+function chiudiModale(){ overlay.classList.remove('aperto'); contenutoModale.innerHTML=''; }
+overlay.addEventListener('click', (e)=>{ if(e.target===overlay) chiudiModale(); });
+
+function confermaGenerica(messaggio, testoOk, onOk){
+  apriModale(`
+    <h2>Conferma richiesta</h2>
+    <div class="avviso-box">${messaggio}</div>
+    <div style="display:flex; gap:8px;">
+      <button class="btn secondario" style="flex:1" id="mConfAnnulla">Annulla</button>
+      <button class="btn pericolo" style="flex:1" id="mConfOk">${testoOk}</button>
+    </div>
+  `);
+  document.getElementById('mConfAnnulla').onclick = chiudiModale;
+  document.getElementById('mConfOk').onclick = ()=>{ chiudiModale(); onOk(); };
+}
+
+/* ============================================================
+   VISTA 1 — DIARIO
+   ============================================================ */
+async function renderDiario(){
+  const cont = document.getElementById('listaLog');
+  cont.innerHTML = '<div class="vuoto">Caricamento…</div>';
+  await caricaEsercizi();
+  const r = await conRetry(()=> sb.from('log_sessioni')
+    .select('*, esercizi(nome, tipo)')
+    .eq('eliminato', false)
+    .order('data', {ascending:false})
+    .order('created_at', {ascending:false})
+    .limit(200));
+  const log = r.data || [];
+  if(log.length===0){ cont.innerHTML = '<div class="vuoto">Nessuna sessione registrata. Tocca "+ Nuova sessione" per iniziare.</div>'; return; }
+
+  // Raggruppamento per giorno: mantiene l'ordine (log già ordinato per data desc)
+  const gruppi = [];
+  for(const v of log){
+    let g = gruppi[gruppi.length-1];
+    if(!g || g.data !== v.data){ g = { data: v.data, voci: [] }; gruppi.push(g); }
+    g.voci.push(v);
+  }
+  cont.innerHTML = gruppi.map((g,i) => `
+    <div class="blocco-giorno" style="--colore-giorno:${coloreGiorno(g.data, i)};">
+      <div class="intestazione-giorno">
+        <span>${etichettaGiorno(g.data)}</span>
+        <button type="button" class="btn-piu-giorno" data-giorno="${g.data}" title="Aggiungi una sessione a questo giorno" aria-label="Aggiungi una sessione a questo giorno">+</button>
+      </div>
+      ${g.voci.map(voceLogHtml).join('')}
+    </div>
+  `).join('');
+  cont.querySelectorAll('.btn-piu-giorno').forEach(btn=>{
+    btn.addEventListener('click', ()=> apriFormLog(null, btn.dataset.giorno));
+  });
+  log.forEach(v=>{
+    document.getElementById('modifica-'+v.id)?.addEventListener('click', ()=> apriFormLog(v));
+    document.getElementById('elimina-'+v.id)?.addEventListener('click', ()=> eliminaLog(v));
+  });
+}
+function coloreGiorno(iso, indice){
+  // "Oggi" spicca sempre con l'accento arancio; i giorni precedenti alternano due colori
+  // della palette così, scorrendo la lista, il confine tra un giorno e l'altro si vede a colpo d'occhio.
+  if(iso === oggiISO()) return 'var(--arancio)';
+  return indice % 2 === 0 ? 'var(--muschio)' : 'var(--roccia)';
+}
+const GIORNI_SETTIMANA = ['domenica','lunedì','martedì','mercoledì','giovedì','venerdì','sabato'];
+function etichettaGiorno(iso){
+  const oggi = oggiISO();
+  if(iso === oggi) return 'Oggi';
+  if(iso === aggiungiGiorni(oggi, -1)) return 'Ieri';
+  const d = dataDaISO(iso);
+  const nomeGiorno = GIORNI_SETTIMANA[d.getUTCDay()];
+  return `${formattaBreve(iso)} · ${nomeGiorno}`;
+}
+function voceLogHtml(v){
+  const nomeEs = v.esercizi?.nome || '—';
+  const tipo = v.esercizi?.tipo;
+  const dettagliValore = tipo==='carico'
+    ? `${v.peso ?? '?'} kg × ${v.serie ?? '?'}×${v.ripetizioni ?? '?'}`
+    : (v.rpe != null ? `RPE ${v.rpe}/10` : (v.fatto ? 'Fatto' : 'Non fatto'));
+  return `
+  <div class="card voce-log">
+    <div class="dettagli">
+      <div><strong>${nomeEs}</strong> ${v.origine==='da_scheda' ? '<span class="badge scheda">da scheda</span>' : ''}</div>
+      <div>${dettagliValore}</div>
+      ${v.nota ? `<div class="nota">${escapeHtml(v.nota)}</div>` : ''}
+    </div>
+    <div class="azioni">
+
+      <button class="icona-btn" id="modifica-${v.id}" aria-label="Modifica">&#9998;</button>
+      <button class="icona-btn" id="elimina-${v.id}" aria-label="Elimina">&#128465;</button>
+    </div>
+  </div>`;
+}
+function escapeHtml(s){ return String(s).replace(/[&<>"']/g, c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c])); }
+
+// Prova a condividere il file con lo share-sheet nativo (su Android permette di scegliere
+// "Salva su Drive", WhatsApp, Files, ecc. direttamente). Se non è supportato o l'utente
+// annulla, scarica comunque il file normalmente nella cartella Download.
+async function condividiOScarica(nomeFile, contenuto, mimeType){
+  try{
+    const file = new File([contenuto], nomeFile, {type: mimeType});
+    if(navigator.canShare && navigator.canShare({files:[file]})){
+      await navigator.share({files:[file], title: nomeFile});
+      return;
+    }
+  }catch(e){
+    if(e.name==='AbortError') return; // l'utente ha chiuso il pannello di condivisione: va bene così
+  }
+  const blob = new Blob([contenuto], {type: mimeType});
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url; a.download = nomeFile;
+  document.body.appendChild(a); a.click(); document.body.removeChild(a);
+  setTimeout(()=> URL.revokeObjectURL(url), 5000);
+}
+
+document.getElementById('btnNuovaSessione').addEventListener('click', ()=> apriFormLog(null));
+
+async function ultimoLogPerEsercizio(esercizioId){
+  if(!stato.cacheUltimoLog) stato.cacheUltimoLog = {};
+  if(esercizioId in stato.cacheUltimoLog) return stato.cacheUltimoLog[esercizioId];
+  const r = await conRetry(()=> sb.from('log_sessioni').select('peso, serie, ripetizioni, data').eq('esercizio_id', esercizioId).eq('eliminato', false).order('data', {ascending:false}).limit(1));
+  const ultimo = (r.data && r.data[0]) || null;
+  stato.cacheUltimoLog[esercizioId] = ultimo;
+  return ultimo;
+}
+async function precompilaDaUltimaVolta(esercizioId){
+  const ultimo = await ultimoLogPerEsercizio(esercizioId);
+  if(!ultimo) return;
+  const selEsercizio = document.getElementById('fEsercizio');
+  const inputPeso = document.getElementById('fPeso');
+  if(!selEsercizio || selEsercizio.value !== esercizioId || !inputPeso) return; // form chiuso o esercizio cambiato nel frattempo
+  const inputSerie = document.getElementById('fSerie');
+  const inputRip = document.getElementById('fRipetizioni');
+  if(inputPeso.value === '') inputPeso.value = ultimo.peso ?? '';
+  if(inputSerie && inputSerie.value === '') inputSerie.value = ultimo.serie ?? '';
+  if(inputRip && inputRip.value === '') inputRip.value = ultimo.ripetizioni ?? '';
+  const cont = document.getElementById('campiCondizionati');
+  if(cont && !document.getElementById('etichettaUltimaVolta')){
+    const etichetta = document.createElement('div');
+    etichetta.id = 'etichettaUltimaVolta';
+    etichetta.style.cssText = 'font-size:12px; color:var(--magnesite-attenuata); margin-top:-4px; margin-bottom:8px;';
+    etichetta.textContent = `Precompilato dall'ultima volta (${formattaBreve(ultimo.data)}) — modifica pure i valori.`;
+    cont.appendChild(etichetta);
+  }
+}
+function apriFormLog(voceEsistente, dataIniziale){
+  const eserciziAttivi = stato.esercizi.filter(e=>!e.archiviato);
+  const bloccaEsercizio = voceEsistente && voceEsistente.origine==='da_scheda';
+  const esSelezionatoId = voceEsistente?.esercizio_id || (eserciziAttivi[0]?.id || '');
+  const dataDefault = voceEsistente?.data || dataIniziale || oggiISO();
+  apriModale(`
+    <h2>${voceEsistente ? 'Modifica sessione' : 'Nuova sessione'}</h2>
+    ${bloccaEsercizio ? '<div class="avviso-box">Log collegato a una prescrizione della Scheda: l\'esercizio non è modificabile qui.</div>' : ''}
+    <div class="riga-form">
+      <label for="fEsercizio">Esercizio</label>
+      <select id="fEsercizio" ${bloccaEsercizio?'disabled':''}>
+        ${eserciziAttivi.map(e=>`<option value="${e.id}" ${e.id===esSelezionatoId?'selected':''}>${e.nome}</option>`).join('')}
+      </select>
+    </div>
+    <div class="riga-form"><label for="fData">Data</label><input type="date" id="fData" value="${dataDefault}"></div>
+    <div id="campiCondizionati"></div>
+    <div class="riga-form"><label for="fNota">Nota (opzionale)</label><textarea id="fNota">${voceEsistente?.nota ? escapeHtml(voceEsistente.nota) : ''}</textarea></div>
+    <div class="errore-box" id="erroreForm" style="display:none;"></div>
+    <div style="display:flex; gap:8px; flex-wrap:wrap;">
+      <button class="btn secondario" style="flex:1" id="fAnnulla">Annulla</button>
+      ${voceEsistente
+        ? `<button class="btn primario" style="flex:1" id="fSalva">Salva</button>`
+        : `<button class="btn secondario" style="flex:1.4" id="fSalvaAltro">Salva e aggiungi un altro</button>
+           <button class="btn primario" style="flex:1" id="fSalva">Salva e chiudi</button>`
+      }
+    </div>
+  `);
+  function renderCampiCondizionati(){
+    const es = esercizioPerId(document.getElementById('fEsercizio').value) || eserciziAttivi[0];
+    const cont = document.getElementById('campiCondizionati');
+    if(!es) { cont.innerHTML=''; return; }
+    if(es.tipo==='carico'){
+      cont.innerHTML = `
+        <div class="riga-form"><label for="fPeso">Peso (kg)</label><input type="number" step="0.5" id="fPeso" value="${voceEsistente?.peso ?? ''}"></div>
+        <div class="riga-form"><label for="fSerie">Serie</label><input type="number" id="fSerie" value="${voceEsistente?.serie ?? ''}"></div>
+        <div class="riga-form"><label for="fRipetizioni">Ripetizioni</label><input type="number" id="fRipetizioni" value="${voceEsistente?.ripetizioni ?? ''}"></div>
+      `;
+      if(!voceEsistente) precompilaDaUltimaVolta(es.id);
+    } else if(es.traccia_rpe){
+      const rpeAttuale = voceEsistente?.rpe ?? '';
+      cont.innerHTML = `
+        <div class="riga-form">
+          <label for="fRpe">Impegno percepito (RPE)</label>
+          <select id="fRpe">
+            <option value="" ${rpeAttuale===''?'selected':''} disabled>Seleziona da 1 a 10…</option>
+            ${Array.from({length:19}, (_,i)=>(2+i)/2).map(n=>`<option value="${n}" ${String(rpeAttuale)===String(n)?'selected':''}>${n}</option>`).join('')}
+          </select>
+        </div>
+      `;
+    } else {
+      cont.innerHTML = `
+        <div class="riga-form"><label><input type="checkbox" id="fFatto" ${(voceEsistente?.fatto ?? true) ? 'checked':''}> Fatto</label></div>
+      `;
+    }
+  }
+  renderCampiCondizionati();
+  if(!bloccaEsercizio) document.getElementById('fEsercizio').addEventListener('change', renderCampiCondizionati);
+  document.getElementById('fAnnulla').onclick = chiudiModale;
+
+  async function eseguiSalvataggio(){
+    const erroreBox = document.getElementById('erroreForm');
+    erroreBox.style.display='none';
+    const esercizioId = bloccaEsercizio ? voceEsistente.esercizio_id : document.getElementById('fEsercizio').value;
+    const es = esercizioPerId(esercizioId);
+    const data = document.getElementById('fData').value;
+    const nota = document.getElementById('fNota').value.trim() || null;
+    if(!data){ erroreBox.textContent='Inserisci una data.'; erroreBox.style.display='block'; return false; }
+    const payload = { esercizio_id: esercizioId, data, nota, origine: voceEsistente?.origine || 'manuale' };
+    if(es?.tipo==='carico'){
+      payload.peso = parseFloat(document.getElementById('fPeso').value) || null;
+      payload.serie = parseInt(document.getElementById('fSerie').value) || null;
+      payload.ripetizioni = parseInt(document.getElementById('fRipetizioni').value) || null;
+      payload.fatto = true;
+      if(payload.peso==null || payload.serie==null || payload.ripetizioni==null){
+        erroreBox.textContent='Compila peso, serie e ripetizioni.'; erroreBox.style.display='block'; return false;
+      }
+    } else if(es?.traccia_rpe){
+      const rpeVal = document.getElementById('fRpe').value;
+      if(!rpeVal){
+        erroreBox.textContent='Seleziona un punteggio RPE da 1 a 10.'; erroreBox.style.display='block'; return false;
+      }
+      payload.rpe = parseFloat(rpeVal);
+      payload.fatto = true;
+    } else {
+      payload.fatto = document.getElementById('fFatto').checked;
+    }
+    try{
+      if(voceEsistente){
+        await conRetry(()=> sb.from('log_sessioni').update(payload).eq('id', voceEsistente.id));
+      } else {
+        await conRetry(()=> sb.from('log_sessioni').insert(payload));
+      }
+      return true;
+    }catch(e){
+      erroreBox.textContent = 'Errore di salvataggio: '+ (e.message||e); erroreBox.style.display='block';
+      return false;
+    }
+  }
+
+  document.getElementById('fSalva').onclick = async ()=>{
+    if(await eseguiSalvataggio()){
+      chiudiModale();
+      renderDiario();
+    }
+  };
+
+  const btnSalvaAltro = document.getElementById('fSalvaAltro');
+  if(btnSalvaAltro){
+    btnSalvaAltro.onclick = async ()=>{
+      const dataMantenuta = document.getElementById('fData').value;
+      if(await eseguiSalvataggio()){
+        await renderDiario(); // aggiorna la lista sotto, senza chiudere il modale
+        // Form vuoto pronto per il prossimo esercizio, stessa data mantenuta.
+        document.getElementById('fEsercizio').value = eserciziAttivi[0]?.id || '';
+        document.getElementById('fData').value = dataMantenuta;
+        document.getElementById('fNota').value = '';
+        renderCampiCondizionati();
+        document.getElementById('erroreForm').style.display='none';
+      }
+    };
+  }
+}
+
+async function eliminaLog(voce){
+  const procedi = async ()=>{
+    try{
+      await conRetry(()=> sb.from('log_sessioni').update({eliminato:true}).eq('id', voce.id));
+      if(voce.origine==='da_scheda' && voce.prescrizione_id){
+        await conRetry(()=> sb.from('prescrizioni').update({fatta:false, log_id:null}).eq('id', voce.prescrizione_id));
+      }
+      renderDiario();
+    }catch(e){ alert('Errore eliminazione: '+(e.message||e)); }
+  };
+  if(voce.origine==='da_scheda'){
+    confermaGenerica('Questo log è collegato a una prescrizione della Scheda. Eliminarlo la farà tornare "da fare".', 'Elimina', procedi);
+  } else {
+    confermaGenerica('Eliminare questa sessione dal Diario?', 'Elimina', procedi);
+  }
+}
+
+/* ============================================================
+   VISTA 2 — GRIGLIA DI ADERENZA
+   ============================================================ */
+function interpolaColore(c1, c2, t){
+  t = Math.max(0, Math.min(1,t));
+  const r = Math.round(c1[0] + (c2[0]-c1[0])*t);
+  const g = Math.round(c1[1] + (c2[1]-c1[1])*t);
+  const b = Math.round(c1[2] + (c2[2]-c1[2])*t);
+  return `rgb(${r},${g},${b})`;
+}
+function coloreAderenza(giorniDaUltimoLog, target){
+  if(giorniDaUltimoLog === null) return `rgb(${COLORE_ROCCIA.join(',')})`;
+  const ratio = giorniDaUltimoLog / target;
+  if(ratio <= 1){
+    if(ratio <= 0.5) return interpolaColore(COLORE_MUSCHIO, COLORE_OCRA, ratio/0.5);
+    return interpolaColore(COLORE_OCRA, COLORE_ARANCIO, (ratio-0.5)/0.5);
+  }
+  const ratio2 = Math.min((ratio-1)/(SOGLIA_ROSSO_PIENO-1), 1);
+  return interpolaColore(COLORE_ARANCIO, COLORE_ROSSO, ratio2);
+}
+
+async function renderGriglia(){
+  const cont = document.getElementById('contenutoGriglia');
+  cont.innerHTML = '<div class="vuoto">Caricamento…</div>';
+  await caricaEsercizi();
+  const attivi = stato.esercizi.filter(e=>!e.archiviato);
+  if(attivi.length===0){ cont.innerHTML = '<div class="vuoto">Nessun esercizio attivo in libreria.</div>'; return; }
+
+  const oggi = oggiISO();
+  const rAll = await conRetry(()=> sb.from('log_sessioni').select('esercizio_id, data').eq('eliminato', false));
+  const logTutti = rAll.data || [];
+
+  // Per ogni esercizio calcoliamo l'aderenza (gestendo il pooling per categoria, se attivo).
+  const righe = attivi.map(es=>{
+    const cat = categoriaPerId(es.categoria_id);
+    const poolCondiviso = !!(cat && cat.target_giorni != null);
+    // Se la categoria ha un countdown condiviso, il "gruppo" di riferimento è tutti gli esercizi
+    // attivi di quella categoria; altrimenti il gruppo è solo l'esercizio stesso (comportamento invariato).
+    const idsGruppo = poolCondiviso
+      ? attivi.filter(e=>e.categoria_id === es.categoria_id).map(e=>e.id)
+      : [es.id];
+    let ultimaData = null;
+    for(const l of logTutti) if(idsGruppo.includes(l.esercizio_id) && (!ultimaData || l.data>ultimaData)) ultimaData = l.data;
+    const giorni = ultimaData ? differenzaGiorni(ultimaData, oggi) : null;
+    const target = poolCondiviso ? cat.target_giorni : es.target_giorni;
+    const ratio = giorni===null ? null : giorni/target;
+    return { es, cat, poolCondiviso, giorni, target, ratio };
+  });
+
+  // Lista unica ordinata dal più urgente (ratio alto → rosso) al più recente (ratio basso → verde).
+  // "Mai fatto" sempre in fondo, indipendentemente dal colore blu-roccia che avrebbe.
+  righe.sort((a,b)=>{
+    if(a.giorni===null && b.giorni===null) return a.es.nome.localeCompare(b.es.nome);
+    if(a.giorni===null) return 1;
+    if(b.giorni===null) return -1;
+    if(b.ratio !== a.ratio) return b.ratio - a.ratio;
+    return a.es.nome.localeCompare(b.es.nome);
+  });
+
+  let html = '<table class="tabella-griglia"><thead><tr><th style="text-align:left">Esercizio</th><th>Stato</th></tr></thead><tbody>';
+  for(const { es, cat, poolCondiviso, giorni, target } of righe){
+    const colore = coloreAderenza(giorni, target);
+    const etichettaStato = giorni===null ? 'mai fatto' : (giorni===0 ? 'oggi' : `${giorni}g fa`);
+    const titoloStato = poolCondiviso ? `Countdown condiviso con gli altri esercizi di "${cat.nome}"` : '';
+    html += `<tr>
+      <td class="nome-esercizio">${cat ? `<span class="pallino-categoria" style="background:${cat.colore}"></span> ` : ''}${es.nome}</td>
+      <td><span class="stato-cella" style="background:${colore}" ${titoloStato ? `title="${titoloStato}"` : ''}>${etichettaStato}${poolCondiviso ? ' &#8226;&#8226;&#8226;' : ''}</span></td>
+    </tr>`;
+  }
+  html += '</tbody></table>';
+  cont.innerHTML = html;
+}
+
+/* ============================================================
+   VISTA 3 — GRAFICI (SVG, senza librerie esterne)
+   ============================================================ */
+document.getElementById('btnPeriodoSettimana').addEventListener('click', ()=>{ stato.periodoGrafico='settimana'; aggiornaToggleGrafico(); renderGraficoSelezionato(); });
+document.getElementById('btnPeriodoMese').addEventListener('click', ()=>{ stato.periodoGrafico='mese'; aggiornaToggleGrafico(); renderGraficoSelezionato(); });
+function aggiornaToggleGrafico(){
+  document.getElementById('btnPeriodoSettimana').classList.toggle('attivo', stato.periodoGrafico==='settimana');
+  document.getElementById('btnPeriodoMese').classList.toggle('attivo', stato.periodoGrafico==='mese');
+}
+document.getElementById('selectEsercizioGrafico').addEventListener('change', renderGraficoSelezionato);
+
+async function renderGrafici(){
+  await caricaEsercizi();
+  const select = document.getElementById('selectEsercizioGrafico');
+  const eserciziCarico = stato.esercizi.filter(e=>e.tipo==='carico');
+  if(eserciziCarico.length===0){
+    select.innerHTML = '<option>—</option>';
+    document.getElementById('contenutoGrafici').innerHTML = '<div class="vuoto">Nessun esercizio di tipo "carico" in libreria.</div>';
+    return;
+  }
+  const valorePrecedente = select.value;
+  select.innerHTML = eserciziCarico.map(e=>`<option value="${e.id}">${e.nome}${e.archiviato?' (archiviato)':''}</option>`).join('');
+  if(eserciziCarico.some(e=>e.id===valorePrecedente)) select.value = valorePrecedente;
+  renderGraficoSelezionato();
+}
+
+async function renderGraficoSelezionato(){
+  const esercizioId = document.getElementById('selectEsercizioGrafico').value;
+  const cont = document.getElementById('contenutoGrafici');
+  if(!esercizioId){ cont.innerHTML = '<div class="vuoto">Seleziona un esercizio</div>'; return; }
+  cont.innerHTML = '<div class="vuoto">Caricamento…</div>';
+  const r = await conRetry(()=> sb.from('log_sessioni').select('data, peso, serie, ripetizioni').eq('eliminato', false).eq('esercizio_id', esercizioId).order('data'));
+  const log = (r.data || []).filter(l=>l.peso!=null);
+  if(log.length===0){ cont.innerHTML = '<div class="vuoto">Nessun dato registrato per questo esercizio.</div>'; return; }
+
+  const oggi = oggiISO();
+  const bucket = stato.periodoGrafico; // 'settimana' | 'mese'
+  const chiaveBucket = (iso)=> bucket==='settimana' ? lunediSettimana(iso) : primoGiornoMese(iso);
+  const bucketCorrente = chiaveBucket(oggi);
+
+  const mappa = new Map();
+  for(const l of log){
+    const k = chiaveBucket(l.data);
+    if(!mappa.has(k)) mappa.set(k, { caricoMax:0, volume:0 });
+    const v = mappa.get(k);
+    v.caricoMax = Math.max(v.caricoMax, l.peso);
+    v.volume += l.peso * (l.serie||0) * (l.ripetizioni||0);
+  }
+  const chiaviOrdinate = [...mappa.keys()].sort().slice(-12); // ultimi 12 bucket
+
+  cont.innerHTML = `
+    <h3 style="font-size:14px; color:var(--magnesite-attenuata); margin:6px 0;">Carico massimo per sessione</h3>
+    <div id="graficoCarico"></div>
+    <h3 style="font-size:14px; color:var(--magnesite-attenuata); margin:14px 0 6px;">Volume totale (peso × serie × ripetizioni)</h3>
+    <div id="graficoVolume"></div>
+  `;
+  document.getElementById('graficoCarico').innerHTML = svgBarre(chiaviOrdinate, mappa, 'caricoMax', bucketCorrente, 'kg', bucket);
+  document.getElementById('graficoVolume').innerHTML = svgBarre(chiaviOrdinate, mappa, 'volume', bucketCorrente, 'kg', bucket);
+}
+
+const MESI_ABBREV = ['gen','feb','mar','apr','mag','giu','lug','ago','set','ott','nov','dic'];
+
+function formatEtichettaBucket(k, bucket){
+  if(bucket === 'mese'){
+    const anno = k.slice(2,4);
+    const meseIdx = parseInt(k.slice(5,7), 10) - 1;
+    return `${MESI_ABBREV[meseIdx]} ${anno}`;
+  }
+  return k.slice(5); // settimana: MM-DD
+}
+
+function formatNumero(v){
+  if(v == null) return '';
+  return Number.isInteger(v) ? String(v) : v.toFixed(1);
+}
+
+function svgBarre(chiavi, mappa, campo, bucketCorrente, unita, bucket){
+  const larghezza = 320, altezza = 150;
+  const paddingLeft = 38, paddingRight = 6, paddingBottom = 24, paddingTop = 12;
+  const valori = chiavi.map(k=>mappa.get(k)[campo]);
+  const massimo = Math.max(...valori, 1);
+  const areaGrafico = altezza - paddingTop - paddingBottom;
+  const larghezzaDisponibile = larghezza - paddingLeft - paddingRight;
+  const larghezzaBarra = larghezzaDisponibile / chiavi.length;
+
+  // Scegliamo un numero massimo di etichette (asse X) equidistanti, includendo sempre la prima e l'ultima,
+  // per evitare che si sovrappongano quando ci sono molte barre.
+  const targetEtichette = Math.min(chiavi.length, 6);
+  const indiciEtichette = new Set();
+  if(targetEtichette <= 1){
+    indiciEtichette.add(0);
+  } else {
+    for(let j=0; j<targetEtichette; j++){
+      indiciEtichette.add(Math.round(j * (chiavi.length-1) / (targetEtichette-1)));
+    }
+  }
+
+  // Asse Y "a righello": linee di riferimento a 0%, 50% e 100% del massimo, con il valore a fianco.
+  let assiY = '';
+  [0, 0.5, 1].forEach(frac=>{
+    const y = altezza - paddingBottom - frac*areaGrafico;
+    const valoreAsse = frac*massimo;
+    assiY += `<line x1="${paddingLeft}" y1="${y}" x2="${larghezza-paddingRight}" y2="${y}"
+      stroke="var(--magnesite, #F2EFE9)" stroke-width="0.5" stroke-opacity="0.2" />`;
+    assiY += `<text x="${paddingLeft-6}" y="${y+3}" text-anchor="end" class="etichetta-parziale">${formatNumero(Math.round(valoreAsse))}</text>`;
+  });
+
+  let barre = '';
+  chiavi.forEach((k,i)=>{
+    const v = mappa.get(k)[campo];
+    const h = (v/massimo) * areaGrafico;
+    const x = paddingLeft + i*larghezzaBarra;
+    const y = altezza - paddingBottom - h;
+    const parziale = k === bucketCorrente;
+    const etichettaValore = `${formatEtichettaBucket(k, bucket)}: ${formatNumero(v)}${unita?' '+unita:''}`;
+    barre += `<rect x="${x+2}" y="${y}" width="${larghezzaBarra-4}" height="${h}" rx="3"
+      fill="${parziale ? 'transparent' : 'var(--arancio, #E8622C)'}"
+      stroke="var(--arancio, #E8622C)" stroke-width="${parziale?1.5:0}" stroke-dasharray="${parziale?'4,3':'0'}"><title>${etichettaValore}</title></rect>`;
+    if(indiciEtichette.has(i)){
+      barre += `<text x="${x+larghezzaBarra/2}" y="${altezza-6}" text-anchor="middle" class="etichetta-parziale">${formatEtichettaBucket(k, bucket)}</text>`;
+    }
+  });
+  const notaParziale = chiavi.includes(bucketCorrente) ? `<div style="font-size:11px; color:var(--magnesite-attenuata); margin-top:4px;">Il periodo tratteggiato è ancora in corso. Passa il mouse sulle barre per il valore esatto.</div>` : `<div style="font-size:11px; color:var(--magnesite-attenuata); margin-top:4px;">Passa il mouse sulle barre per il valore esatto.</div>`;
+  return `<svg class="grafico-svg" viewBox="0 0 ${larghezza} ${altezza}">${assiY}${barre}</svg>${notaParziale}`;
+}
+
+/* ============================================================
+   VISTA 4 — MACROCICLO (dedicata a Trazioni)
+   Sostituisce la vecchia Scheda a pianificazione settimanale generica.
+   Un macrociclo definisce N settimane consecutive con percentuale/serie/
+   ripetizioni per Trazioni; il kg totale e la zavorra netta si ricalcolano
+   ogni volta che salvi modifiche (finché la settimana non è "fatta",
+   poi restano congelati come lo storico del Diario).
+   ============================================================ */
+async function renderScheda(){
+  await caricaEsercizi();
+  const esTrazioni = stato.esercizi.find(e=>e.nome==='Trazioni' && !e.archiviato);
+  const contSel = document.getElementById('selettoreMacrociclo');
+  const cont = document.getElementById('contenutoMacrociclo');
+  if(!esTrazioni){
+    contSel.innerHTML = '';
+    cont.innerHTML = '<div class="vuoto">Esercizio "Trazioni" non trovato (o archiviato) in Libreria.</div>';
+    return;
+  }
+  cont.innerHTML = '<div class="vuoto">Caricamento…</div>';
+  const r = await conRetry(()=> sb.from('macrocicli').select('*').eq('esercizio_id', esTrazioni.id).order('data_inizio', {ascending:false}));
+  const cicli = r.data || [];
+  if(!stato.macrocicloSelezionatoId || !cicli.some(c=>c.id===stato.macrocicloSelezionatoId)){
+    stato.macrocicloSelezionatoId = cicli[0]?.id || null;
+  }
+  contSel.innerHTML = `
+    <div style="display:flex; gap:8px; align-items:center;">
+      <select id="selMacrociclo" style="flex:1;" ${cicli.length===0?'disabled':''}>
+        ${cicli.length===0 ? '<option>Nessun macrociclo</option>' : cicli.map(m=>`<option value="${m.id}" ${m.id===stato.macrocicloSelezionatoId?'selected':''}>${escapeHtml(m.nome || 'Macrociclo')} — dal ${formattaBreve(m.data_inizio)}</option>`).join('')}
+      </select>
+      <button class="btn secondario" id="btnNuovoMacrociclo">+ Nuovo</button>
+    </div>
+  `;
+  document.getElementById('btnNuovoMacrociclo').onclick = ()=> apriFormMacrociclo(esTrazioni.id);
+  if(cicli.length===0){
+    cont.innerHTML = '<div class="vuoto">Nessun macrociclo creato. Creane uno per pianificare le Trazioni su più settimane.</div>';
+    return;
+  }
+  document.getElementById('selMacrociclo').addEventListener('change', (e)=>{ stato.macrocicloSelezionatoId = e.target.value; renderDettaglioMacrociclo(); });
+  await renderDettaglioMacrociclo();
+}
+
+async function renderDettaglioMacrociclo(){
+  const cont = document.getElementById('contenutoMacrociclo');
+  cont.innerHTML = '<div class="vuoto">Caricamento…</div>';
+  const rM = await conRetry(()=> sb.from('macrocicli').select('*').eq('id', stato.macrocicloSelezionatoId).single());
+  const macrociclo = rM.data;
+  const rS = await conRetry(()=> sb.from('macrociclo_settimane').select('*').eq('macrociclo_id', macrociclo.id).order('numero_settimana'));
+  const settimane = rS.data || [];
+  const idsSettimane = settimane.map(s=>s.id);
+  const rSed = idsSettimane.length
+    ? await conRetry(()=> sb.from('macrociclo_sedute').select('*').in('settimana_id', idsSettimane).order('numero_seduta'))
+    : { data: [] };
+  const sedute = rSed.data || [];
+  const oggi = oggiISO();
+  cont.innerHTML = `
+    <div class="card">
+      <h3 style="margin:0 0 4px;">${escapeHtml(macrociclo.nome || 'Macrociclo')}</h3>
+      <div style="font-size:12px; color:var(--magnesite-attenuata); margin-bottom:10px;">${macrociclo.durata_settimane} settimane, dal ${formattaBreve(macrociclo.data_inizio)}</div>
+      <div id="righeSettimane"></div>
+      <div class="errore-box" id="mErrore" style="display:none;"></div>
+      <div style="display:flex; gap:8px; margin-top:12px;">
+        <button class="btn secondario" style="flex:1" id="btnEliminaMacrociclo">Elimina macrociclo</button>
+        <button class="btn primario" style="flex:1" id="btnSalvaMacrociclo">Salva modifiche</button>
+      </div>
+    </div>
+  `;
+  const contRighe = document.getElementById('righeSettimane');
+  contRighe.innerHTML = settimane.map(s=>{
+    const inizio = aggiungiGiorni(macrociclo.data_inizio, (s.numero_settimana-1)*7);
+    const fine = aggiungiGiorni(inizio, 6);
+    const corrente = oggi>=inizio && oggi<=fine;
+    const seduteSettimana = sedute.filter(sed=>sed.settimana_id===s.id);
+    const qualcunaFatta = seduteSettimana.some(sed=>sed.fatta);
+    const disabilitaRiposo = qualcunaFatta ? 'disabled' : '';
+    const seduteHtml = seduteSettimana.map(sed=>{
+      const disabilita = sed.fatta ? 'disabled' : '';
+      return `
+      <div style="border-top:1px solid var(--ardesia-bordo); padding:8px 0;">
+        <div style="display:flex; gap:6px; margin-bottom:6px; align-items:flex-end;">
+          <div style="flex:1; min-width:0;">
+            <label style="display:block; font-size:11px; color:var(--magnesite-attenuata); margin-bottom:2px;">%</label>
+            <input type="number" step="0.5" class="input-percentuale" data-id="${sed.id}" value="${sed.percentuale ?? ''}" ${disabilita} style="width:100%;">
+          </div>
+          <div style="flex:1; min-width:0;">
+            <label style="display:block; font-size:11px; color:var(--magnesite-attenuata); margin-bottom:2px;">Serie</label>
+            <input type="number" class="input-serie" data-id="${sed.id}" value="${sed.serie ?? ''}" ${disabilita} style="width:100%;">
+          </div>
+          <div style="flex:1; min-width:0;">
+            <label style="display:block; font-size:11px; color:var(--magnesite-attenuata); margin-bottom:2px;">Rip.</label>
+            <input type="number" class="input-ripetizioni" data-id="${sed.id}" value="${sed.ripetizioni ?? ''}" ${disabilita} style="width:100%;">
+          </div>
+          ${!sed.fatta ? `<button class="icona-btn" data-id="${sed.id}" data-azione="rimuovi-seduta" aria-label="Rimuovi seduta">&#128465;</button>` : ''}
+        </div>
+        <div style="display:flex; justify-content:space-between; align-items:center;">
+          <span style="font-size:12px; color:var(--magnesite-attenuata);">${sed.kg_calcolato_snapshot!=null ? `${sed.kg_calcolato_snapshot} kg totali${sed.zavorra_calcolata_snapshot!=null ? ` · zavorra ${sed.zavorra_calcolata_snapshot} kg` : ''}` : 'da calcolare'}</span>
+          <label style="display:flex; align-items:center; gap:6px; font-size:13px;">
+            <input type="checkbox" class="check-fatta-seduta" data-id="${sed.id}" ${sed.fatta?'checked':''} ${sed.fatta?'disabled':''}> fatta
+          </label>
+        </div>
+      </div>`;
+    }).join('');
+    return `
+    <div style="border-top:2px solid var(--ardesia-bordo); padding:10px 0;">
+      <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:6px;">
+        <strong style="font-size:13px; ${corrente?'color:var(--arancio);':''}">Settimana ${s.numero_settimana}${corrente?' · in corso':''}</strong>
+        <span style="font-size:12px; color:var(--magnesite-attenuata);">${formattaBreve(inizio)}–${formattaBreve(fine)}</span>
+      </div>
+      <label style="display:flex; align-items:center; gap:6px; font-size:12px; color:var(--magnesite-attenuata); margin-bottom:4px;">
+        <input type="checkbox" class="check-riposo" data-id="${s.id}" ${s.riposo?'checked':''} ${disabilitaRiposo}> Settimana di riposo
+      </label>
+      <div class="blocco-sedute-settimana" data-id="${s.id}" style="display:${s.riposo?'none':'block'};">
+        ${seduteHtml}
+        <button class="btn secondario" data-id="${s.id}" data-azione="aggiungi-seduta" style="width:100%; margin-top:8px; font-size:13px;">+ Aggiungi seduta</button>
+      </div>
+      <div class="etichetta-riposo" data-id="${s.id}" style="display:${s.riposo?'block':'none'}; font-size:12px; color:var(--magnesite-attenuata); padding:2px 0;">Settimana di scarico, nessuna seduta pianificata.</div>
+    </div>`;
+  }).join('');
+
+  contRighe.querySelectorAll('.check-riposo').forEach(chkRiposo=>{
+    chkRiposo.addEventListener('change', (e)=>{
+      const id = e.target.dataset.id;
+      const mostraSedute = !e.target.checked;
+      contRighe.querySelector(`.blocco-sedute-settimana[data-id="${id}"]`).style.display = mostraSedute ? 'block' : 'none';
+      contRighe.querySelector(`.etichetta-riposo[data-id="${id}"]`).style.display = mostraSedute ? 'none' : 'block';
+    });
+  });
+  contRighe.querySelectorAll('.check-fatta-seduta').forEach(chk=>{
+    chk.addEventListener('change', (e)=>{
+      if(e.target.checked){
+        const sed = sedute.find(x=>x.id===e.target.dataset.id);
+        const s = settimane.find(x=>x.id===sed.settimana_id);
+        gestisciSedutaFatta(macrociclo, s, sed);
+      }
+    });
+  });
+  contRighe.querySelectorAll('[data-azione="aggiungi-seduta"]').forEach(btn=>{
+    btn.addEventListener('click', async ()=>{
+      const settimanaId = btn.dataset.id;
+      const seduteEsistenti = sedute.filter(sed=>sed.settimana_id===settimanaId);
+      const prossimoNumero = seduteEsistenti.length ? Math.max(...seduteEsistenti.map(x=>x.numero_seduta))+1 : 1;
+      await conRetry(()=> sb.from('macrociclo_sedute').insert({settimana_id: settimanaId, numero_seduta: prossimoNumero, percentuale:70, serie:3, ripetizioni:8}));
+      renderDettaglioMacrociclo();
+    });
+  });
+  contRighe.querySelectorAll('[data-azione="rimuovi-seduta"]').forEach(btn=>{
+    btn.addEventListener('click', async ()=>{
+      await conRetry(()=> sb.from('macrociclo_sedute').delete().eq('id', btn.dataset.id));
+      renderDettaglioMacrociclo();
+    });
+  });
+  document.getElementById('btnSalvaMacrociclo').onclick = ()=> salvaModificheSettimane(macrociclo);
+  document.getElementById('btnEliminaMacrociclo').onclick = ()=>{
+    confermaGenerica(`Eliminare "${macrociclo.nome||'questo macrociclo'}"? Le sessioni già registrate nel Diario restano intatte, si perde solo il piano.`, 'Elimina', async ()=>{
+      await conRetry(()=> sb.from('macrocicli').delete().eq('id', macrociclo.id));
+      stato.macrocicloSelezionatoId = null;
+      renderScheda();
+    });
+  };
+}
+
+async function salvaModificheSettimane(macrociclo){
+  const erroreBox = document.getElementById('mErrore');
+  erroreBox.style.display='none';
+  try{
+    const rConfig = await conRetry(()=> sb.from('config').select('*').eq('id',1).single());
+    const config = rConfig.data || {};
+    const esTrazioni = esercizioPerId(macrociclo.esercizio_id);
+
+    // Settimane: salva il flag riposo; se una settimana passa a riposo, elimina le sue sedute non ancora fatte
+    const checkRiposi = [...document.querySelectorAll('.check-riposo')];
+    for(const chkRiposo of checkRiposi){
+      if(chkRiposo.disabled) continue; // c'è già una seduta fatta questa settimana: non si può passare a riposo
+      const settimanaId = chkRiposo.dataset.id;
+      await conRetry(()=> sb.from('macrociclo_settimane').update({riposo: chkRiposo.checked}).eq('id', settimanaId));
+      if(chkRiposo.checked){
+        await conRetry(()=> sb.from('macrociclo_sedute').delete().eq('settimana_id', settimanaId).eq('fatta', false));
+      }
+    }
+
+    // Sedute: ricalcola percentuale/serie/ripetizioni/kg/zavorra per quelle non ancora fatte
+    const inputPercentuali = [...document.querySelectorAll('.input-percentuale')];
+    for(const inputPerc of inputPercentuali){
+      if(inputPerc.disabled) continue; // seduta già fatta: non toccarla
+      const id = inputPerc.dataset.id;
+      const percentuale = parseFloat(inputPerc.value) || null;
+      const serie = parseInt(document.querySelector(`.input-serie[data-id="${id}"]`).value) || null;
+      const ripetizioni = parseInt(document.querySelector(`.input-ripetizioni[data-id="${id}"]`).value) || null;
+      const kg = (config.tmax!=null && percentuale!=null) ? Math.round((config.tmax*percentuale/100)*10)/10 : null;
+      const zavorra = (esTrazioni?.sottrai_peso_corporeo && kg!=null && config.peso!=null) ? Math.round((kg-config.peso)*10)/10 : null;
+      await conRetry(()=> sb.from('macrociclo_sedute').update({
+        percentuale, serie, ripetizioni, kg_calcolato_snapshot: kg, zavorra_calcolata_snapshot: zavorra
+      }).eq('id', id).eq('fatta', false));
+    }
+    renderDettaglioMacrociclo();
+  }catch(e){ erroreBox.textContent = 'Errore: '+(e.message||e); erroreBox.style.display='block'; }
+}
+
+async function gestisciSedutaFatta(macrociclo, s, sed){
+  const kg = sed.kg_calcolato_snapshot;
+  apriModale(`
+    <h2>Conferma sessione: Trazioni (settimana ${s.numero_settimana})</h2>
+    <div class="riga-form"><label for="mfData">Data</label><input type="date" id="mfData" value="${oggiISO()}"></div>
+    <div class="riga-form"><label for="mfPeso">Peso (kg)</label><input type="number" step="0.5" id="mfPeso" value="${kg ?? ''}"></div>
+    <div class="riga-form"><label for="mfSerie">Serie</label><input type="number" id="mfSerie" value="${sed.serie ?? ''}"></div>
+    <div class="riga-form"><label for="mfRipetizioni">Ripetizioni</label><input type="number" id="mfRipetizioni" value="${sed.ripetizioni ?? ''}"></div>
+    <div class="riga-form"><label for="mfNota">Nota (opzionale)</label><textarea id="mfNota"></textarea></div>
+    <div class="errore-box" id="mfErrore" style="display:none;"></div>
+    <div style="display:flex; gap:8px;">
+      <button class="btn secondario" style="flex:1" id="mfAnnulla">Annulla</button>
+      <button class="btn primario" style="flex:1" id="mfConferma">Conferma</button>
+    </div>
+  `);
+  document.getElementById('mfAnnulla').onclick = ()=>{ chiudiModale(); renderDettaglioMacrociclo(); };
+  document.getElementById('mfConferma').onclick = async ()=>{
+    const erroreBox = document.getElementById('mfErrore');
+    const payload = {
+      esercizio_id: macrociclo.esercizio_id,
+      data: document.getElementById('mfData').value,
+      origine: 'da_scheda',
+      nota: document.getElementById('mfNota').value.trim() || null,
+      peso: parseFloat(document.getElementById('mfPeso').value) || null,
+      serie: parseInt(document.getElementById('mfSerie').value) || null,
+      ripetizioni: parseInt(document.getElementById('mfRipetizioni').value) || null,
+      fatto: true,
+    };
+    try{
+      const ins = await conRetry(()=> sb.from('log_sessioni').insert(payload).select().single());
+      await conRetry(()=> sb.from('macrociclo_sedute').update({fatta:true, log_id: ins.data.id}).eq('id', sed.id));
+      chiudiModale();
+      renderDettaglioMacrociclo();
+    }catch(e){ erroreBox.textContent = 'Errore: '+(e.message||e); erroreBox.style.display='block'; }
+  };
+}
+
+function apriFormMacrociclo(esercizioId){
+  apriModale(`
+    <h2>Nuovo macrociclo — Trazioni</h2>
+    <div class="riga-form"><label for="mcNome">Nome (opzionale)</label><input type="text" id="mcNome" placeholder="Es. Blocco estate"></div>
+    <div class="riga-form"><label for="mcInizio">Data inizio</label><input type="date" id="mcInizio" value="${oggiISO()}"></div>
+    <div class="riga-form"><label for="mcDurata">Durata (settimane)</label><input type="number" id="mcDurata" min="1" max="52" value="8"></div>
+    <div class="errore-box" id="mcErrore" style="display:none;"></div>
+    <div style="display:flex; gap:8px;">
+      <button class="btn secondario" style="flex:1" id="mcAnnulla">Annulla</button>
+      <button class="btn primario" style="flex:1" id="mcSalva">Crea</button>
+    </div>
+  `);
+  document.getElementById('mcAnnulla').onclick = chiudiModale;
+  document.getElementById('mcSalva').onclick = async ()=>{
+    const erroreBox = document.getElementById('mcErrore');
+    const nome = document.getElementById('mcNome').value.trim() || null;
+    const dataInizio = document.getElementById('mcInizio').value;
+    const durata = parseInt(document.getElementById('mcDurata').value);
+    if(!dataInizio || !durata || durata<1){
+      erroreBox.textContent = 'Inserisci data inizio e durata valide.'; erroreBox.style.display='block'; return;
+    }
+    try{
+      const ins = await conRetry(()=> sb.from('macrocicli').insert({esercizio_id: esercizioId, nome, data_inizio: dataInizio, durata_settimane: durata}).select().single());
+      const macrocicloId = ins.data.id;
+      const settimaneDaCreare = Array.from({length:durata}, (_,i)=>({macrociclo_id: macrocicloId, numero_settimana: i+1}));
+      const insS = await conRetry(()=> sb.from('macrociclo_settimane').insert(settimaneDaCreare).select());
+      const settimaneCreate = insS.data || [];
+      const seduteDaCreare = settimaneCreate.map(s=>({settimana_id: s.id, numero_seduta: 1, percentuale: 70, serie: 3, ripetizioni: 8}));
+      if(seduteDaCreare.length) await conRetry(()=> sb.from('macrociclo_sedute').insert(seduteDaCreare));
+      chiudiModale();
+      stato.macrocicloSelezionatoId = macrocicloId;
+      renderScheda();
+    }catch(e){ erroreBox.textContent = 'Errore: '+(e.message||e); erroreBox.style.display='block'; }
+  };
+}
+
+/* ============================================================
+   VISTA 5 — LIBRERIA ESERCIZI
+   ============================================================ */
+document.getElementById('btnFiltroAttivi').addEventListener('click', ()=>{ stato.filtroLibreria='attivi'; aggiornaToggleLibreria(); renderLibreria(); });
+document.getElementById('btnFiltroArchiviati').addEventListener('click', ()=>{ stato.filtroLibreria='archiviati'; aggiornaToggleLibreria(); renderLibreria(); });
+function aggiornaToggleLibreria(){
+  document.getElementById('btnFiltroAttivi').classList.toggle('attivo', stato.filtroLibreria==='attivi');
+  document.getElementById('btnFiltroArchiviati').classList.toggle('attivo', stato.filtroLibreria==='archiviati');
+}
+document.getElementById('btnNuovoEsercizio').addEventListener('click', ()=> apriFormEsercizio(null));
+
+async function renderLibreria(){
+  await caricaEsercizi();
+  const cont = document.getElementById('listaEsercizi');
+  const lista = stato.esercizi.filter(e=> stato.filtroLibreria==='attivi' ? !e.archiviato : e.archiviato);
+  if(lista.length===0){ cont.innerHTML = `<div class="vuoto">Nessun esercizio ${stato.filtroLibreria}.</div>`; return; }
+
+  // Raggruppamento per categoria (le senza-categoria vanno in fondo)
+  const gruppi = new Map();
+  for(const e of lista){
+    const cat = categoriaPerId(e.categoria_id);
+    const chiave = cat ? cat.nome : '\uFFFFSenza categoria';
+    if(!gruppi.has(chiave)) gruppi.set(chiave, { cat, esercizi: [] });
+    gruppi.get(chiave).esercizi.push(e);
+  }
+  const chiaviOrdinate = [...gruppi.keys()].sort();
+
+  cont.innerHTML = chiaviOrdinate.map(chiave=>{
+    const { cat, esercizi } = gruppi.get(chiave);
+    const nomeCat = cat ? cat.nome : 'Senza categoria';
+    const colore = cat ? cat.colore : 'var(--magnesite-attenuata)';
+    return `
+      <div class="intestazione-categoria"><span class="pallino-categoria" style="background:${colore}"></span>${nomeCat}</div>
+      ${esercizi.map(e=>`
+      <div class="card" style="display:flex; justify-content:space-between; align-items:center;">
+        <div style="display:flex; align-items:center; gap:8px;">
+          <span class="pallino-categoria" style="background:${colore}"></span>
+          <div><strong>${e.nome}</strong><br><span style="font-size:12px; color:var(--magnesite-attenuata);">${e.tipo==='carico'?'A carico':'Binario'} — ogni ${(cat && cat.target_giorni!=null) ? cat.target_giorni : e.target_giorni} giorni${(cat && cat.target_giorni!=null) ? ' (condiviso con la categoria)' : ''}</span></div>
+        </div>
+        <div class="azioni">
+          <button class="icona-btn" id="mod-es-${e.id}" aria-label="Modifica">&#9998;</button>
+          <button class="icona-btn" id="arc-es-${e.id}" aria-label="${e.archiviato?'Riattiva':'Archivia'}">${e.archiviato?'&#8635;':'&#128230;'}</button>
+          ${e.archiviato ? `<button class="icona-btn" id="rim-es-${e.id}" aria-label="Rimuovi per sempre">&#128465;</button>` : ''}
+        </div>
+      </div>`).join('')}
+    `;
+  }).join('');
+
+  lista.forEach(e=>{
+    document.getElementById('mod-es-'+e.id).addEventListener('click', ()=> apriFormEsercizio(e));
+    document.getElementById('arc-es-'+e.id).addEventListener('click', ()=> e.archiviato ? riattivaEsercizio(e) : archiviaEsercizio(e));
+    if(e.archiviato) document.getElementById('rim-es-'+e.id).addEventListener('click', ()=> rimuoviPerSempreEsercizio(e));
+  });
+}
+
+async function apriFormEsercizio(esistente){
+  let bloccaTipo = false, numeroLogCollegati = 0;
+  if(esistente){
+    const r = await conRetry(()=> sb.from('log_sessioni').select('id', {count:'exact', head:true}).eq('esercizio_id', esistente.id).eq('eliminato', false));
+    numeroLogCollegati = r.count || 0;
+    bloccaTipo = numeroLogCollegati > 0;
+  }
+  apriModale(`
+    <h2>${esistente ? 'Modifica esercizio' : 'Nuovo esercizio'}</h2>
+    ${bloccaTipo ? `<div class="avviso-box">Non modificabile: ci sono ${numeroLogCollegati} log collegati a questo esercizio. Per cambiare tipo, archivialo e creane uno nuovo.</div>` : ''}
+    <div class="riga-form"><label for="eNome">Nome</label><input type="text" id="eNome" value="${esistente?escapeHtml(esistente.nome):''}"></div>
+    <div class="riga-form">
+      <label for="eTipo">Tipo</label>
+      <select id="eTipo" ${bloccaTipo?'disabled':''}>
+        <option value="binario" ${esistente?.tipo==='binario'?'selected':''}>Binario (fatto/non fatto)</option>
+        <option value="carico" ${esistente?.tipo==='carico'?'selected':''}>A carico (peso/serie/ripetizioni)</option>
+      </select>
+    </div>
+    <div class="riga-form"><label for="eTarget">Ogni quanti giorni (max 10)</label><input type="number" id="eTarget" min="1" max="10" value="${esistente?.target_giorni ?? 3}"></div>
+    <div class="riga-form">
+      <label for="eCategoria">Categoria</label>
+      <select id="eCategoria">
+        <option value="">Senza categoria</option>
+        ${stato.categorie.map(c=>`<option value="${c.id}" ${esistente?.categoria_id===c.id?'selected':''}>${escapeHtml(c.nome)}</option>`).join('')}
+        <option value="__nuova__">+ Nuova categoria…</option>
+      </select>
+    </div>
+    <div id="areaNuovaCategoria" style="display:none;">
+      <div class="riga-form"><label for="eNomeCategoria">Nome nuova categoria</label><input type="text" id="eNomeCategoria"></div>
+      <div class="riga-form">
+        <label>Colore</label>
+        <div class="griglia-colori" id="grigliaColori">
+          ${PALETTE_CATEGORIE.map((p,i)=>`<button type="button" class="swatch-colore ${i===0?'selezionato':''}" data-colore="${p.valore}" title="${p.nome}" style="background:${p.valore}"></button>`).join('')}
+        </div>
+      </div>
+    </div>
+    <div class="errore-box" id="eErrore" style="display:none;"></div>
+    <div style="display:flex; gap:8px;">
+      <button class="btn secondario" style="flex:1" id="eAnnulla">Annulla</button>
+      <button class="btn primario" style="flex:1" id="eSalva">Salva</button>
+    </div>
+  `);
+  let coloreScelto = PALETTE_CATEGORIE[0].valore;
+  document.getElementById('eCategoria').addEventListener('change', (ev)=>{
+    document.getElementById('areaNuovaCategoria').style.display = ev.target.value==='__nuova__' ? 'block' : 'none';
+  });
+  document.getElementById('grigliaColori').addEventListener('click', (ev)=>{
+    const btn = ev.target.closest('.swatch-colore');
+    if(!btn) return;
+    document.querySelectorAll('.swatch-colore').forEach(b=>b.classList.remove('selezionato'));
+    btn.classList.add('selezionato');
+    coloreScelto = btn.dataset.colore;
+  });
+  document.getElementById('eAnnulla').onclick = chiudiModale;
+  document.getElementById('eSalva').onclick = async ()=>{
+    const erroreBox = document.getElementById('eErrore');
+    const nome = document.getElementById('eNome').value.trim();
+    const target = parseInt(document.getElementById('eTarget').value);
+    if(!nome){ erroreBox.textContent='Inserisci un nome.'; erroreBox.style.display='block'; return; }
+    if(!target || target<1 || target>10){ erroreBox.textContent='Il target giorni deve essere tra 1 e 10.'; erroreBox.style.display='block'; return; }
+    let categoriaId = document.getElementById('eCategoria').value || null;
+    if(categoriaId === '__nuova__'){
+      const nomeCategoria = document.getElementById('eNomeCategoria').value.trim();
+      if(!nomeCategoria){ erroreBox.textContent='Inserisci un nome per la nuova categoria.'; erroreBox.style.display='block'; return; }
+      try{
+        const insCat = await conRetry(()=> sb.from('categorie').insert({nome: nomeCategoria, colore: coloreScelto}).select().single());
+        categoriaId = insCat.data.id;
+        stato.categorie.push(insCat.data);
+      }catch(e){ erroreBox.textContent='Errore creazione categoria: '+(e.message||e); erroreBox.style.display='block'; return; }
+    }
+    const payload = { nome, target_giorni: target, categoria_id: categoriaId };
+    if(!bloccaTipo) payload.tipo = document.getElementById('eTipo').value;
+    try{
+      if(esistente) await conRetry(()=> sb.from('esercizi').update(payload).eq('id', esistente.id));
+      else await conRetry(()=> sb.from('esercizi').insert({...payload, tipo: document.getElementById('eTipo').value}));
+      chiudiModale();
+      renderLibreria();
+    }catch(e){ erroreBox.textContent='Errore: '+(e.message||e); erroreBox.style.display='block'; }
+  };
+}
+
+
+async function archiviaEsercizio(es){
+  const settimanaCorrenteMonday = lunediSettimana(oggiISO());
+  const r = await conRetry(()=> sb.from('prescrizioni').select('id', {count:'exact', head:true}).eq('esercizio_id', es.id).eq('fatta', false).gte('settimana_inizio', settimanaCorrenteMonday));
+  const nPendenti = r.count || 0;
+  const procedi = async ()=>{
+    await conRetry(()=> sb.from('esercizi').update({archiviato:true}).eq('id', es.id));
+    renderLibreria();
+  };
+  if(nPendenti>0){
+    confermaGenerica(`Hai ${nPendenti} prescrizioni pianificate non completate per questo esercizio. Vuoi archiviarlo comunque?`, 'Archivia comunque', procedi);
+  } else {
+    procedi();
+  }
+}
+async function riattivaEsercizio(es){
+  await conRetry(()=> sb.from('esercizi').update({archiviato:false}).eq('id', es.id));
+  renderLibreria();
+}
+
+async function rimuoviPerSempreEsercizio(es){
+  confermaGenerica(`Rimuovere per sempre "${es.nome}"? Se non ha storico collegato verrà eliminato definitivamente dal database; se invece ha log o prescrizioni collegate, lo storico resterà intatto nel Diario ma l'esercizio sparirà per sempre da Libreria, Griglia e Grafici (non reversibile da qui).`, 'Rimuovi per sempre', async ()=>{
+    try{
+      await conRetry(()=> sb.rpc('elimina_esercizio_se_senza_storico', {p_id: es.id}), 1);
+      renderLibreria();
+    }catch(e){
+      // Ha storico collegato: il database ha correttamente rifiutato la cancellazione fisica.
+      // Fallback automatico: lo nascondiamo per sempre mantenendo lo storico intatto.
+      try{
+        await conRetry(()=> sb.from('esercizi').update({eliminato:true}).eq('id', es.id));
+        renderLibreria();
+      }catch(e2){ alert('Errore: '+(e2.message||e2)); }
+    }
+  });
+}
+
+/* ============================================================
+   GESTIONE CATEGORIE (rinomina, ricolora, elimina davvero)
+   ============================================================ */
+document.getElementById('btnGestisciCategorie').addEventListener('click', apriGestioneCategorie);
+async function apriGestioneCategorie(){
+  await caricaEsercizi();
+  apriModale(`
+    <h2>Gestisci categorie</h2>
+    <div id="listaCategorieGestione">${stato.categorie.length ? '' : '<div class="vuoto">Nessuna categoria creata ancora.</div>'}</div>
+    <button class="btn secondario blocco" id="catChiudi" style="margin-top:10px;">Chiudi</button>
+  `);
+  document.getElementById('catChiudi').onclick = ()=>{ chiudiModale(); renderLibreria(); };
+  const cont = document.getElementById('listaCategorieGestione');
+  cont.innerHTML = stato.categorie.map(c=>`
+    <div class="card">
+      <div class="riga-form"><label>Nome</label><input type="text" id="catNome-${c.id}" value="${escapeHtml(c.nome)}"></div>
+      <div class="riga-form">
+        <label>Colore</label>
+        <div class="griglia-colori" id="catColori-${c.id}">
+          ${PALETTE_CATEGORIE.map(p=>`<button type="button" class="swatch-colore ${p.valore.toLowerCase()===c.colore.toLowerCase()?'selezionato':''}" data-colore="${p.valore}" title="${p.nome}" style="background:${p.valore}"></button>`).join('')}
+        </div>
+      </div>
+      <div style="display:flex; gap:8px;">
+        <button class="btn secondario" style="flex:1" id="catSalva-${c.id}">Salva</button>
+        <button class="btn pericolo" style="flex:1" id="catElimina-${c.id}">Elimina categoria</button>
+      </div>
+    </div>
+  `).join('');
+  stato.categorie.forEach(c=>{
+    let coloreScelto = c.colore;
+    document.getElementById('catColori-'+c.id).addEventListener('click', (ev)=>{
+      const btn = ev.target.closest('.swatch-colore');
+      if(!btn) return;
+      document.querySelectorAll('#catColori-'+c.id+' .swatch-colore').forEach(b=>b.classList.remove('selezionato'));
+      btn.classList.add('selezionato');
+      coloreScelto = btn.dataset.colore;
+    });
+    document.getElementById('catSalva-'+c.id).addEventListener('click', async ()=>{
+      const nuovoNome = document.getElementById('catNome-'+c.id).value.trim();
+      if(!nuovoNome){ alert('Il nome non può essere vuoto.'); return; }
+      try{
+        await conRetry(()=> sb.from('categorie').update({nome:nuovoNome, colore:coloreScelto}).eq('id', c.id));
+        apriGestioneCategorie();
+      }catch(e){ alert('Errore: '+(e.message||e)); }
+    });
+    document.getElementById('catElimina-'+c.id).addEventListener('click', ()=>{
+      confermaGenerica(`Eliminare la categoria "${c.nome}"? Gli esercizi che la usano torneranno "senza categoria" (non vengono toccati).`, 'Elimina categoria', async ()=>{
+        try{
+          await conRetry(()=> sb.from('categorie').delete().eq('id', c.id));
+          apriGestioneCategorie();
+        }catch(e){ alert('Errore: '+(e.message||e)); }
+      });
+    });
+  });
+}
+
+/* ============================================================
+   IMPOSTAZIONI (Tmax/Smax + backup)
+   ============================================================ */
+document.getElementById('btnImpostazioni').addEventListener('click', apriImpostazioni);
+async function apriImpostazioni(){
+  const r = await conRetry(()=> sb.from('config').select('*').eq('id',1).single());
+  const config = r.data || {};
+  apriModale(`
+    <h2>Impostazioni</h2>
+    <div class="card">
+      <h3>Tmax / Smax</h3>
+      <div class="riga-form"><label for="cTmax">Tmax (kg)</label><input type="number" step="0.1" id="cTmax" value="${config.tmax ?? ''}"></div>
+      <div class="riga-form"><label for="cSmax">Smax (kg)</label><input type="number" step="0.1" id="cSmax" value="${config.smax ?? ''}"></div>
+      <div class="riga-form"><label for="cPeso">Peso corporeo (kg)</label><input type="number" step="0.1" id="cPeso" value="${config.peso ?? ''}"></div>
+      <button class="btn primario blocco" id="cSalva">Salva</button>
+    </div>
+    <div class="card">
+      <h3>Backup</h3>
+      <button class="btn secondario blocco" id="cScaricaJson" style="margin-bottom:8px;">Scarica backup (JSON)</button>
+      <button class="btn secondario blocco" id="cScaricaTxt" style="margin-bottom:10px;">Scarica riepilogo leggibile (TXT)</button>
+      <button class="btn secondario blocco" id="cMostraImporta">Importa da testo</button>
+      <div id="areaImporta" style="display:none; margin-top:10px;">
+        <textarea id="cTestoImporta" placeholder="Incolla qui il JSON esportato in precedenza" style="width:100%; min-height:100px;"></textarea>
+        <button class="btn pericolo blocco" id="cConfermaImporta" style="margin-top:8px;">Sostituisci tutti i dati</button>
+      </div>
+    </div>
+    <div class="errore-box" id="iErrore" style="display:none;"></div>
+    <button class="btn secondario blocco" id="cChiudi">Chiudi</button>
+  `);
+  document.getElementById('cChiudi').onclick = chiudiModale;
+  document.getElementById('cSalva').onclick = async ()=>{
+    const tmax = parseFloat(document.getElementById('cTmax').value) || null;
+    const smax = parseFloat(document.getElementById('cSmax').value) || null;
+    const peso = parseFloat(document.getElementById('cPeso').value) || null;
+    await conRetry(()=> sb.from('config').update({tmax, smax, peso}).eq('id',1));
+    chiudiModale();
+  };
+  document.getElementById('cScaricaJson').onclick = async ()=>{
+    try{
+      const [es, log, presc, cfg] = await Promise.all([
+        conRetry(()=> sb.from('esercizi').select('*')),
+        conRetry(()=> sb.from('log_sessioni').select('*')),
+        conRetry(()=> sb.from('prescrizioni').select('*')),
+        conRetry(()=> sb.from('config').select('*').eq('id',1).single()),
+      ]);
+      const backup = { esercizi: es.data, log_sessioni: log.data, prescrizioni: presc.data, config: cfg.data, esportato_il: new Date().toISOString() };
+      await condividiOScarica(`diario_backup_${oggiISO()}.json`, JSON.stringify(backup, null, 2), 'application/json');
+      segnaBackupFatto();
+    }catch(e){ alert('Errore export: '+(e.message||e)); }
+  };
+  document.getElementById('cScaricaTxt').onclick = async ()=>{
+    try{
+      const [es, log, cfg] = await Promise.all([
+        conRetry(()=> sb.from('esercizi').select('*, categorie(nome)').order('nome')),
+        conRetry(()=> sb.from('log_sessioni').select('*, esercizi(nome)').eq('eliminato', false).order('data', {ascending:false})),
+        conRetry(()=> sb.from('config').select('*').eq('id',1).single()),
+      ]);
+      const righe = [];
+      righe.push('DIARIO ALLENAMENTO — Riepilogo leggibile');
+      righe.push(`Esportato il: ${new Date().toLocaleString('it-IT')}`);
+      righe.push('');
+      righe.push('--- IMPOSTAZIONI ---');
+      righe.push(`Tmax: ${cfg.data?.tmax ?? '—'} kg`);
+      righe.push(`Smax: ${cfg.data?.smax ?? '—'} kg`);
+      righe.push(`Peso corporeo: ${cfg.data?.peso ?? '—'} kg`);
+      righe.push('');
+      righe.push('--- ESERCIZI ---');
+      (es.data||[]).forEach(e=>{
+        righe.push(`- ${e.nome} [${e.categorie?.nome || 'senza categoria'}]${e.archiviato ? ' (archiviato)' : ''}`);
+      });
+      righe.push('');
+      righe.push('--- STORICO SESSIONI (dalla più recente) ---');
+      (log.data||[]).forEach(v=>{
+        const dettagli = v.peso!=null ? `${v.peso}kg × ${v.serie ?? '?'}×${v.ripetizioni ?? '?'}` : (v.rpe!=null ? `RPE ${v.rpe}/10` : (v.fatto ? 'fatto' : 'non fatto'));
+        righe.push(`${v.data} · ${v.esercizi?.nome || '—'} · ${dettagli}${v.nota ? ' · nota: '+v.nota : ''}`);
+      });
+      await condividiOScarica(`diario_riepilogo_${oggiISO()}.txt`, righe.join('\n'), 'text/plain');
+    }catch(e){ alert('Errore export: '+(e.message||e)); }
+  };
+  document.getElementById('cMostraImporta').onclick = ()=>{
+    document.getElementById('areaImporta').style.display = 'block';
+  };
+  document.getElementById('cConfermaImporta').onclick = ()=>{
+    const testo = document.getElementById('cTestoImporta').value.trim();
+    const erroreBox = document.getElementById('iErrore');
+    let payload;
+    try{ payload = JSON.parse(testo); }
+    catch(e){ erroreBox.textContent='JSON non valido.'; erroreBox.style.display='block'; return; }
+    confermaGenerica('Questo sostituirà TUTTI i dati attuali con quelli del file importato.', 'Sostituisci', async ()=>{
+      try{
+        await conRetry(()=> sb.rpc('ripristina_backup', {payload}));
+        chiudiModale();
+        alert('Importazione completata.');
+        mostraVista(stato.vistaCorrente);
+      }catch(e){ alert('Errore import: '+(e.message||e)); }
+    });
+  };
+}
+
+/* ============================================================
+   PWA: registrazione service worker + rilevazione connessione
+   ============================================================ */
+if('serviceWorker' in navigator){
+  window.addEventListener('load', ()=> navigator.serviceWorker.register('sw.js').catch(()=>{}));
+}
+window.addEventListener('online', ()=> impostaConnessione(true));
+window.addEventListener('offline', ()=> impostaConnessione(false));
+
+/* ============================================================
+   PROMEMORIA BACKUP SETTIMANALE
+   ============================================================ */
+function segnaBackupFatto(){
+  localStorage.setItem('ultimoBackupEsportato', oggiISO());
+  document.getElementById('bannerBackup').style.display = 'none';
+}
+function controllaPromemoriaBackup(){
+  const ultimo = localStorage.getItem('ultimoBackupEsportato');
+  const giorniPassati = ultimo ? differenzaGiorni(ultimo, oggiISO()) : Infinity;
+  const banner = document.getElementById('bannerBackup');
+  if(giorniPassati < 7){ banner.style.display = 'none'; return; }
+  const messaggio = ultimo ? `Sono passati ${giorniPassati} giorni dall'ultimo backup.` : 'Non hai ancora fatto un backup.';
+  banner.innerHTML = `
+    <div class="avviso-box" style="display:flex; justify-content:space-between; align-items:center; gap:10px; border-radius:0; margin-bottom:0;">
+      <span>${messaggio}</span>
+      <div style="display:flex; gap:6px; flex-shrink:0;">
+        <button class="btn secondario" id="btnBackupPiuTardi" style="padding:6px 10px; font-size:12px;">Più tardi</button>
+        <button class="btn primario" id="btnBackupOra" style="padding:6px 10px; font-size:12px;">Backup ora</button>
+      </div>
+    </div>
+  `;
+  banner.style.display = 'block';
+  document.getElementById('btnBackupPiuTardi').onclick = ()=>{ banner.style.display = 'none'; };
+  document.getElementById('btnBackupOra').onclick = ()=> apriImpostazioni();
+}
+
+/* ============================================================
+   AVVIO
+   ============================================================ */
+renderDiario();
+controllaPromemoriaBackup();
+</script>
+</body>
+</html>
