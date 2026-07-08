@@ -251,8 +251,6 @@ textarea{resize:vertical; min-height:60px;}
   </div>
 </div>
 
-<div id="bannerBackup" style="display:none;"></div>
-
 <main>
 
   <!-- ============ VISTA 1: DIARIO ============ -->
@@ -1489,7 +1487,6 @@ async function apriImpostazioni(){
       ]);
       const backup = { esercizi: es.data, log_sessioni: log.data, prescrizioni: presc.data, config: cfg.data, esportato_il: new Date().toISOString() };
       await condividiOScarica(`diario_backup_${oggiISO()}.json`, JSON.stringify(backup, null, 2), 'application/json');
-      segnaBackupFatto();
     }catch(e){ alert('Errore export: '+(e.message||e)); }
   };
   document.getElementById('cScaricaTxt').onclick = async ()=>{
@@ -1551,37 +1548,9 @@ window.addEventListener('online', ()=> impostaConnessione(true));
 window.addEventListener('offline', ()=> impostaConnessione(false));
 
 /* ============================================================
-   PROMEMORIA BACKUP SETTIMANALE
-   ============================================================ */
-function segnaBackupFatto(){
-  localStorage.setItem('ultimoBackupEsportato', oggiISO());
-  document.getElementById('bannerBackup').style.display = 'none';
-}
-function controllaPromemoriaBackup(){
-  const ultimo = localStorage.getItem('ultimoBackupEsportato');
-  const giorniPassati = ultimo ? differenzaGiorni(ultimo, oggiISO()) : Infinity;
-  const banner = document.getElementById('bannerBackup');
-  if(giorniPassati < 7){ banner.style.display = 'none'; return; }
-  const messaggio = ultimo ? `Sono passati ${giorniPassati} giorni dall'ultimo backup.` : 'Non hai ancora fatto un backup.';
-  banner.innerHTML = `
-    <div class="avviso-box" style="display:flex; justify-content:space-between; align-items:center; gap:10px; border-radius:0; margin-bottom:0;">
-      <span>${messaggio}</span>
-      <div style="display:flex; gap:6px; flex-shrink:0;">
-        <button class="btn secondario" id="btnBackupPiuTardi" style="padding:6px 10px; font-size:12px;">Più tardi</button>
-        <button class="btn primario" id="btnBackupOra" style="padding:6px 10px; font-size:12px;">Backup ora</button>
-      </div>
-    </div>
-  `;
-  banner.style.display = 'block';
-  document.getElementById('btnBackupPiuTardi').onclick = ()=>{ banner.style.display = 'none'; };
-  document.getElementById('btnBackupOra').onclick = ()=> apriImpostazioni();
-}
-
-/* ============================================================
    AVVIO
    ============================================================ */
 renderDiario();
-controllaPromemoriaBackup();
 </script>
 </body>
 </html>
