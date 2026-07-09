@@ -284,7 +284,7 @@ textarea{resize:vertical; min-height:60px;}
         <button class="btn secondario attivo" id="btnPeriodoSettimana">Settimana</button>
         <button class="btn secondario" id="btnPeriodoMese">Mese</button>
       </div>
-      <div id="contenutoGrafici"><div class="vuoto">Seleziona un esercizio di tipo "carico"</div></div>
+      <div id="contenutoGrafici"><div class="vuoto">Seleziona un esercizio</div></div>
     </div>
   </section>
 
@@ -420,6 +420,14 @@ const PALETTE_CATEGORIE = [
   { nome:'Grigio caldo', valore:'#8C8478' },
 ];
 
+/* Le 3 specialità di Arrampicata: colori fissi (indipendenti dal colore
+   della categoria) usati sia nel selettore del form sia nel grafico RPE. */
+const SPECIALITA_ARRAMPICATA = [
+  { valore:'corda',   etichetta:'Corda',   colore:'#3E6B8A' },
+  { valore:'4x4',      etichetta:'4x4',     colore:'#C9A227' },
+  { valore:'boulder',  etichetta:'Boulder', colore:'#8A6FA3' },
+];
+
 /* ============================================================
    CARICAMENTO ESERCIZI E CATEGORIE (usato in più viste)
    ============================================================ */
@@ -533,9 +541,10 @@ function etichettaGiorno(iso){
 function voceLogHtml(v){
   const nomeEs = v.esercizi?.nome || '—';
   const tipo = v.esercizi?.tipo;
+  const etichettaSpecialita = v.specialita ? SPECIALITA_ARRAMPICATA.find(s=>s.valore===v.specialita)?.etichetta : null;
   const dettagliValore = tipo==='carico'
     ? `${v.peso ?? '?'} kg × ${v.serie ?? '?'}×${v.ripetizioni ?? '?'}`
-    : (v.rpe != null ? `RPE ${v.rpe}/10` : (v.fatto ? 'Fatto' : 'Non fatto'));
+    : (v.rpe != null ? `${etichettaSpecialita ? etichettaSpecialita+' · ' : ''}RPE ${v.rpe}/10` : (v.fatto ? 'Fatto' : 'Non fatto'));
   return `
   <div class="card voce-log">
     <div class="dettagli">
@@ -643,7 +652,16 @@ function apriFormLog(voceEsistente, dataIniziale){
       if(!voceEsistente) precompilaDaUltimaVolta(es.id);
     } else if(es.traccia_rpe){
       const rpeAttuale = voceEsistente?.rpe ?? '';
+      const richiedeSpecialita = es.nome === 'Arrampicata';
+      const specialitaAttuale = voceEsistente?.specialita || '';
       cont.innerHTML = `
+        ${richiedeSpecialita ? `
+        <div class="riga-form">
+          <label>Specialità</label>
+          <div class="toggle-periodo" id="gruppoSpecialita">
+            ${SPECIALITA_ARRAMPICATA.map(s=>`<button type="button" class="btn secondario ${specialitaAttuale===s.valore?'attivo':''}" data-specialita="${s.valore}">${s.etichetta}</button>`).join('')}
+          </div>
+        </div>` : ''}
         <div class="riga-form">
           <label for="fRpe">Impegno percepito (RPE)</label>
           <select id="fRpe">
@@ -652,6 +670,14 @@ function apriFormLog(voceEsistente, dataIniziale){
           </select>
         </div>
       `;
+      if(richiedeSpecialita){
+        document.querySelectorAll('#gruppoSpecialita button').forEach(b=>{
+          b.addEventListener('click', ()=>{
+            document.querySelectorAll('#gruppoSpecialita button').forEach(x=>x.classList.remove('attivo'));
+            b.classList.add('attivo');
+          });
+        });
+      }
     } else {
       cont.innerHTML = `
         <div class="riga-form"><label><input type="checkbox" id="fFatto" ${(voceEsistente?.fatto ?? true) ? 'checked':''}> Fatto</label></div>
@@ -686,6 +712,13 @@ function apriFormLog(voceEsistente, dataIniziale){
       }
       payload.rpe = parseFloat(rpeVal);
       payload.fatto = true;
+      if(es.nome === 'Arrampicata'){
+        const bottoneAttivo = document.querySelector('#gruppoSpecialita button.attivo');
+        if(!bottoneAttivo){
+          erroreBox.textContent='Seleziona la specialità (corda, 4x4 o boulder).'; erroreBox.style.display='block'; return false;
+        }
+        payload.specialita = bottoneAttivo.dataset.specialita;
+      }
     } else {
       payload.fatto = document.getElementById('fFatto').checked;
     }
@@ -830,15 +863,15 @@ document.getElementById('selectEsercizioGrafico').addEventListener('change', ren
 async function renderGrafici(){
   await caricaEsercizi();
   const select = document.getElementById('selectEsercizioGrafico');
-  const eserciziCarico = stato.esercizi.filter(e=>e.tipo==='carico');
-  if(eserciziCarico.length===0){
+  const eserciziGrafico = stato.esercizi.filter(e=>e.tipo==='carico' || e.traccia_rpe);
+  if(eserciziGrafico.length===0){
     select.innerHTML = '<option>—</option>';
-    document.getElementById('contenutoGrafici').innerHTML = '<div class="vuoto">Nessun esercizio di tipo "carico" in libreria.</div>';
+    document.getElementById('contenutoGrafici').innerHTML = '<div class="vuoto">Nessun esercizio graficabile in libreria.</div>';
     return;
   }
   const valorePrecedente = select.value;
-  select.innerHTML = eserciziCarico.map(e=>`<option value="${e.id}">${e.nome}${e.archiviato?' (archiviato)':''}</option>`).join('');
-  if(eserciziCarico.some(e=>e.id===valorePrecedente)) select.value = valorePrecedente;
+  select.innerHTML = eserciziGrafico.map(e=>`<option value="${e.id}">${e.nome}${e.archiviato?' (archiviato)':''}</option>`).join('');
+  if(eserciziGrafico.some(e=>e.id===valorePrecedente)) select.value = valorePrecedente;
   renderGraficoSelezionato();
 }
 
@@ -846,6 +879,16 @@ async function renderGraficoSelezionato(){
   const esercizioId = document.getElementById('selectEsercizioGrafico').value;
   const cont = document.getElementById('contenutoGrafici');
   if(!esercizioId){ cont.innerHTML = '<div class="vuoto">Seleziona un esercizio</div>'; return; }
+  const es = esercizioPerId(esercizioId);
+  if(es?.traccia_rpe){
+    await renderGraficoRpe(esercizioId, es);
+  } else {
+    await renderGraficoCarico(esercizioId);
+  }
+}
+
+async function renderGraficoCarico(esercizioId){
+  const cont = document.getElementById('contenutoGrafici');
   cont.innerHTML = '<div class="vuoto">Caricamento…</div>';
   const r = await conRetry(()=> sb.from('log_sessioni').select('data, peso, serie, ripetizioni').eq('eliminato', false).eq('esercizio_id', esercizioId).order('data'));
   const log = (r.data || []).filter(l=>l.peso!=null);
@@ -940,6 +983,120 @@ function svgBarre(chiavi, mappa, campo, bucketCorrente, unita, bucket){
   });
   const notaParziale = chiavi.includes(bucketCorrente) ? `<div style="font-size:11px; color:var(--magnesite-attenuata); margin-top:4px;">Il periodo tratteggiato è ancora in corso. Passa il mouse sulle barre per il valore esatto.</div>` : `<div style="font-size:11px; color:var(--magnesite-attenuata); margin-top:4px;">Passa il mouse sulle barre per il valore esatto.</div>`;
   return `<svg class="grafico-svg" viewBox="0 0 ${larghezza} ${altezza}">${assiY}${barre}</svg>${notaParziale}`;
+}
+
+/* Grafico RPE (per esercizi con traccia_rpe, es. Arrampicata). Per Arrampicata
+   distingue corda/4x4/boulder con 3 colori fissi (SPECIALITA_ARRAMPICATA);
+   per altri eventuali esercizi RPE futuri, una singola serie color accento. */
+async function renderGraficoRpe(esercizioId, es){
+  const cont = document.getElementById('contenutoGrafici');
+  cont.innerHTML = '<div class="vuoto">Caricamento…</div>';
+  const r = await conRetry(()=> sb.from('log_sessioni').select('data, rpe, specialita').eq('eliminato', false).eq('esercizio_id', esercizioId).order('data'));
+  const log = (r.data || []).filter(l=>l.rpe!=null);
+  if(log.length===0){ cont.innerHTML = '<div class="vuoto">Nessun dato RPE registrato per questo esercizio.</div>'; return; }
+
+  const oggi = oggiISO();
+  const bucket = stato.periodoGrafico; // 'settimana' | 'mese'
+  const chiaveBucket = (iso)=> bucket==='settimana' ? lunediSettimana(iso) : primoGiornoMese(iso);
+  const bucketCorrente = chiaveBucket(oggi);
+
+  const conSpecialita = es.nome === 'Arrampicata';
+  const gruppi = conSpecialita ? SPECIALITA_ARRAMPICATA : [{ valore:'_unica', etichetta:null, colore:'var(--arancio, #E8622C)' }];
+  const mappaPerGruppo = {};
+  gruppi.forEach(g=> mappaPerGruppo[g.valore] = new Map());
+
+  for(const l of log){
+    // Fallback difensivo: se per qualche motivo manca la specialità (non dovrebbe succedere,
+    // il form la richiede sempre), la voce finisce comunque nel primo gruppo invece di sparire.
+    const gruppo = conSpecialita ? (l.specialita || gruppi[0].valore) : '_unica';
+    const k = chiaveBucket(l.data);
+    const m = mappaPerGruppo[gruppo];
+    if(!m.has(k)) m.set(k, { somma:0, conteggio:0 });
+    const v = m.get(k);
+    v.somma += l.rpe;
+    v.conteggio += 1;
+  }
+
+  const tutteLeChiavi = new Set();
+  Object.values(mappaPerGruppo).forEach(m=> m.forEach((_,k)=> tutteLeChiavi.add(k)));
+  const chiaviOrdinate = [...tutteLeChiavi].sort().slice(-12); // ultimi 12 bucket
+
+  cont.innerHTML = `
+    <h3 style="font-size:14px; color:var(--magnesite-attenuata); margin:6px 0;">Impegno percepito (RPE)</h3>
+    ${conSpecialita ? `<div style="display:flex; gap:12px; margin-bottom:8px; flex-wrap:wrap;">
+      ${SPECIALITA_ARRAMPICATA.map(s=>`<div style="display:flex; align-items:center; gap:5px; font-size:12px; color:var(--magnesite-attenuata);"><span style="width:10px; height:10px; border-radius:50%; background:${s.colore}; display:inline-block;"></span>${s.etichetta}</div>`).join('')}
+    </div>` : ''}
+    <div id="graficoRpe"></div>
+  `;
+  document.getElementById('graficoRpe').innerHTML = svgLineeRpe(chiaviOrdinate, mappaPerGruppo, gruppi, bucketCorrente, bucket);
+}
+
+function svgLineeRpe(chiavi, mappaPerGruppo, gruppi, bucketCorrente, bucket){
+  const larghezza = 320, altezza = 150;
+  const paddingLeft = 30, paddingRight = 6, paddingBottom = 24, paddingTop = 12;
+  const areaGrafico = altezza - paddingTop - paddingBottom;
+  const larghezzaDisponibile = larghezza - paddingLeft - paddingRight;
+  const passo = chiavi.length > 1 ? larghezzaDisponibile / (chiavi.length - 1) : 0;
+  const xPer = i => chiavi.length > 1 ? paddingLeft + i*passo : paddingLeft + larghezzaDisponibile/2;
+  const yPer = valore => altezza - paddingBottom - ((valore-1)/9) * areaGrafico; // scala RPE fissa 1–10
+
+  const targetEtichette = Math.min(chiavi.length, 6);
+  const indiciEtichette = new Set();
+  if(targetEtichette <= 1){
+    indiciEtichette.add(0);
+  } else {
+    for(let j=0; j<targetEtichette; j++){
+      indiciEtichette.add(Math.round(j * (chiavi.length-1) / (targetEtichette-1)));
+    }
+  }
+
+  // Asse Y "a righello" sulla scala fissa RPE 1–10 (non relativo al massimo dei dati,
+  // a differenza dei grafici a barre, perché la scala RPE ha un range noto e costante).
+  let assiY = '';
+  [0, 0.5, 1].forEach(frac=>{
+    const valoreAsse = 1 + frac*9;
+    const y = yPer(valoreAsse);
+    assiY += `<line x1="${paddingLeft}" y1="${y}" x2="${larghezza-paddingRight}" y2="${y}"
+      stroke="var(--magnesite, #F2EFE9)" stroke-width="0.5" stroke-opacity="0.2" />`;
+    assiY += `<text x="${paddingLeft-6}" y="${y+3}" text-anchor="end" class="etichetta-parziale">${formatNumero(valoreAsse)}</text>`;
+  });
+
+  let etichetteX = '';
+  chiavi.forEach((k,i)=>{
+    if(indiciEtichette.has(i)){
+      etichetteX += `<text x="${xPer(i)}" y="${altezza-6}" text-anchor="middle" class="etichetta-parziale">${formatEtichettaBucket(k, bucket)}</text>`;
+    }
+  });
+
+  let serie = '';
+  gruppi.forEach(g=>{
+    const mappa = mappaPerGruppo[g.valore] || new Map();
+    const puntiPresenti = [];
+    chiavi.forEach((k,i)=>{
+      if(mappa.has(k)){
+        const v = mappa.get(k);
+        puntiPresenti.push({ i, chiave:k, media: v.somma / v.conteggio });
+      }
+    });
+    // Colleghiamo con una linea solo bucket consecutivi: un segmento tra due punti
+    // separati da un bucket senza dati darebbe un'idea sbagliata dell'andamento.
+    let linee = '';
+    for(let p=0; p<puntiPresenti.length-1; p++){
+      if(puntiPresenti[p+1].i === puntiPresenti[p].i + 1){
+        linee += `<line x1="${xPer(puntiPresenti[p].i)}" y1="${yPer(puntiPresenti[p].media)}" x2="${xPer(puntiPresenti[p+1].i)}" y2="${yPer(puntiPresenti[p+1].media)}" stroke="${g.colore}" stroke-width="2" />`;
+      }
+    }
+    const cerchi = puntiPresenti.map(p=>{
+      const parziale = p.chiave === bucketCorrente;
+      const etichettaValore = `${formatEtichettaBucket(p.chiave, bucket)}${g.etichetta ? ' · '+g.etichetta : ''}: RPE ${formatNumero(p.media)}`;
+      return `<circle cx="${xPer(p.i)}" cy="${yPer(p.media)}" r="${parziale?3:4}"
+        fill="${parziale ? 'transparent' : g.colore}" stroke="${g.colore}" stroke-width="${parziale?1.5:0}"><title>${etichettaValore}</title></circle>`;
+    }).join('');
+    serie += linee + cerchi;
+  });
+
+  const notaParziale = chiavi.includes(bucketCorrente) ? `<div style="font-size:11px; color:var(--magnesite-attenuata); margin-top:4px;">Il periodo tratteggiato è ancora in corso. Passa il mouse sui punti per il valore esatto.</div>` : `<div style="font-size:11px; color:var(--magnesite-attenuata); margin-top:4px;">Passa il mouse sui punti per il valore esatto.</div>`;
+  return `<svg class="grafico-svg" viewBox="0 0 ${larghezza} ${altezza}">${assiY}${serie}${etichetteX}</svg>${notaParziale}`;
 }
 
 /* ============================================================
@@ -1512,7 +1669,7 @@ async function apriImpostazioni(){
       righe.push('');
       righe.push('--- STORICO SESSIONI (dalla più recente) ---');
       (log.data||[]).forEach(v=>{
-        const dettagli = v.peso!=null ? `${v.peso}kg × ${v.serie ?? '?'}×${v.ripetizioni ?? '?'}` : (v.rpe!=null ? `RPE ${v.rpe}/10` : (v.fatto ? 'fatto' : 'non fatto'));
+        const dettagli = v.peso!=null ? `${v.peso}kg × ${v.serie ?? '?'}×${v.ripetizioni ?? '?'}` : (v.rpe!=null ? `${v.specialita ? v.specialita+' · ' : ''}RPE ${v.rpe}/10` : (v.fatto ? 'fatto' : 'non fatto'));
         righe.push(`${v.data} · ${v.esercizi?.nome || '—'} · ${dettagli}${v.nota ? ' · nota: '+v.nota : ''}`);
       });
       await condividiOScarica(`diario_riepilogo.txt`, righe.join('\n'), 'text/plain');
