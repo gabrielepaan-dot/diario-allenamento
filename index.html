@@ -194,6 +194,19 @@ textarea{resize:vertical; min-height:60px;}
 .toggle-periodo button.attivo{background:var(--arancio); color:var(--magnesite);}
 .grafico-svg{width:100%; height:auto; display:block;}
 .etichetta-parziale{font-size:11px; fill:var(--magnesite-attenuata);}
+.grafico-svg-cont{position:relative;}
+.scroll-grafico{overflow-x:auto; -webkit-overflow-scrolling:touch; padding-bottom:2px;}
+.grafico-svg-sessione{height:auto; display:block;}
+.tooltip-grafico{
+  position:absolute; transform:translate(-50%,-100%) translateY(-8px);
+  background:var(--magnesite); color:var(--ardesia); font-family:var(--font-display);
+  font-weight:600; font-size:13px; padding:4px 9px; border-radius:6px; white-space:nowrap;
+  pointer-events:none; z-index:6;
+}
+.tooltip-grafico::after{
+  content:''; position:absolute; top:100%; left:50%; transform:translateX(-50%);
+  border:5px solid transparent; border-top-color:var(--magnesite);
+}
 
 /* Scheda */
 .nav-settimana{display:flex; align-items:center; justify-content:space-between; margin-bottom:14px;}
@@ -283,6 +296,7 @@ textarea{resize:vertical; min-height:60px;}
       <div class="toggle-periodo">
         <button class="btn secondario attivo" id="btnPeriodoSettimana">Settimana</button>
         <button class="btn secondario" id="btnPeriodoMese">Mese</button>
+        <button class="btn secondario" id="btnPeriodoSessione">Sessione</button>
       </div>
       <div id="contenutoGrafici"><div class="vuoto">Seleziona un esercizio</div></div>
     </div>
@@ -405,7 +419,37 @@ const stato = {
   filtroLibreria: 'attivi',
   macrocicloSelezionatoId: null,
   periodoGrafico: 'settimana',
+  config: null,          // cache riga config (tmax/smax/peso attuali), invalidata al salvataggio in Impostazioni
+  configStorico: null,   // cache config_storico (tmax/smax/peso storicizzati per data), invalidata al salvataggio
 };
+
+/* Config attuale (tmax/smax/peso corporeo) e relativo storico, con cache semplice
+   invalidata ogni volta che si salva in Impostazioni. */
+async function caricaConfig(){
+  if(stato.config) return stato.config;
+  const r = await conRetry(()=> sb.from('config').select('*').eq('id',1).single());
+  stato.config = r.data || {};
+  return stato.config;
+}
+async function caricaConfigStorico(){
+  if(stato.configStorico) return stato.configStorico;
+  const r = await conRetry(()=> sb.from('config_storico').select('*').order('data'));
+  stato.configStorico = r.data || [];
+  return stato.configStorico;
+}
+/* Trova il valore di `campo` (tmax|smax|peso) valido alla data indicata, cercando
+   nello storico l'ultima riga con data <= dataISO. Se non c'è nulla di storicizzato
+   per quella data (tipicamente sessioni precedenti all'inizio della storicizzazione),
+   ricade sul valore attuale e lo marca come stima. */
+function valoreStoricoADATA(storico, campo, dataISO, fallback){
+  let valore = null, trovato = false;
+  for(const riga of storico){
+    if(riga.data > dataISO) break;
+    if(riga[campo] != null){ valore = riga[campo]; trovato = true; }
+  }
+  if(trovato) return { valore, stima:false };
+  return { valore: fallback, stima: true };
+}
 
 /* Palette fissa coerente con lo stile dell'app, tra cui scegliere il colore
    quando si crea una nuova categoria di esercizi. */
@@ -613,7 +657,13 @@ async function precompilaDaUltimaVolta(esercizioId){
   }
 }
 function apriFormLog(voceEsistente, dataIniziale){
-  const eserciziAttivi = stato.esercizi.filter(e=>!e.archiviato);
+  // Arrampicata sempre in cima alla lista (è l'esercizio più frequente), il resto
+  // mantiene l'ordine alfabetico già garantito dalla query in caricaEsercizi (sort stabile).
+  const eserciziAttivi = stato.esercizi.filter(e=>!e.archiviato).sort((a,b)=>{
+    if(a.nome==='Arrampicata') return -1;
+    if(b.nome==='Arrampicata') return 1;
+    return 0;
+  });
   const bloccaEsercizio = voceEsistente && voceEsistente.origine==='da_scheda';
   const esSelezionatoId = voceEsistente?.esercizio_id || (eserciziAttivi[0]?.id || '');
   const dataDefault = voceEsistente?.data || dataIniziale || oggiISO();
@@ -644,12 +694,27 @@ function apriFormLog(voceEsistente, dataIniziale){
     const cont = document.getElementById('campiCondizionati');
     if(!es) { cont.innerHTML=''; return; }
     if(es.tipo==='carico'){
+      const eZavorra = !!es.sottrai_peso_corporeo;
       cont.innerHTML = `
-        <div class="riga-form"><label for="fPeso">Peso (kg)</label><input type="number" step="0.5" id="fPeso" value="${voceEsistente?.peso ?? ''}"></div>
+        <div class="riga-form"><label for="fPeso">${eZavorra ? 'Zavorra (kg)' : 'Peso (kg)'}</label><input type="number" step="0.5" id="fPeso" value="${voceEsistente?.peso ?? ''}"></div>
         <div class="riga-form"><label for="fSerie">Serie</label><input type="number" id="fSerie" value="${voceEsistente?.serie ?? ''}"></div>
         <div class="riga-form"><label for="fRipetizioni">Ripetizioni</label><input type="number" id="fRipetizioni" value="${voceEsistente?.ripetizioni ?? ''}"></div>
+        ${eZavorra ? '<div id="fTotaleStimato" style="font-size:12px; color:var(--magnesite-attenuata); margin-top:-6px;"></div>' : ''}
       `;
       if(!voceEsistente) precompilaDaUltimaVolta(es.id);
+      if(eZavorra){
+        caricaConfig().then(cfg=>{
+          const inputPeso = document.getElementById('fPeso');
+          const box = document.getElementById('fTotaleStimato');
+          if(!inputPeso || !box) return;
+          const aggiornaTotale = ()=>{
+            const z = parseFloat(inputPeso.value);
+            box.textContent = (!isNaN(z) && cfg.peso!=null) ? `Totale stimato: ${(z+cfg.peso).toFixed(1)} kg (corpo ${cfg.peso}kg + zavorra)` : '';
+          };
+          inputPeso.addEventListener('input', aggiornaTotale);
+          aggiornaTotale();
+        });
+      }
     } else if(es.traccia_rpe){
       const rpeAttuale = voceEsistente?.rpe ?? '';
       const richiedeSpecialita = es.nome === 'Arrampicata';
@@ -854,11 +919,46 @@ async function renderGriglia(){
    ============================================================ */
 document.getElementById('btnPeriodoSettimana').addEventListener('click', ()=>{ stato.periodoGrafico='settimana'; aggiornaToggleGrafico(); renderGraficoSelezionato(); });
 document.getElementById('btnPeriodoMese').addEventListener('click', ()=>{ stato.periodoGrafico='mese'; aggiornaToggleGrafico(); renderGraficoSelezionato(); });
+document.getElementById('btnPeriodoSessione').addEventListener('click', ()=>{ stato.periodoGrafico='sessione'; aggiornaToggleGrafico(); renderGraficoSelezionato(); });
 function aggiornaToggleGrafico(){
   document.getElementById('btnPeriodoSettimana').classList.toggle('attivo', stato.periodoGrafico==='settimana');
   document.getElementById('btnPeriodoMese').classList.toggle('attivo', stato.periodoGrafico==='mese');
+  document.getElementById('btnPeriodoSessione').classList.toggle('attivo', stato.periodoGrafico==='sessione');
 }
 document.getElementById('selectEsercizioGrafico').addEventListener('change', renderGraficoSelezionato);
+
+/* ------------------------------------------------------------
+   Tooltip al TAP (sostituisce l'hover-only <title> SVG, che su
+   mobile non risponde al tocco). Qualunque elemento SVG con
+   data-tip="testo" diventa tappabile; un solo tooltip alla volta,
+   si chiude toccando un altro elemento o fuori dal grafico.
+   ------------------------------------------------------------ */
+let elementoTooltipGrafico = null;
+function nascondiTooltipGrafico(){
+  if(elementoTooltipGrafico){ elementoTooltipGrafico.remove(); elementoTooltipGrafico = null; }
+}
+function mostraTooltipGrafico(target, testo, containerEl){
+  nascondiTooltipGrafico();
+  const box = document.createElement('div');
+  box.className = 'tooltip-grafico';
+  box.textContent = testo;
+  containerEl.appendChild(box);
+  const rBar = target.getBoundingClientRect();
+  const rCont = containerEl.getBoundingClientRect();
+  box.style.left = (rBar.left - rCont.left + rBar.width/2) + 'px';
+  box.style.top = (rBar.top - rCont.top) + 'px';
+  elementoTooltipGrafico = box;
+}
+function attivaTooltipGrafico(containerEl){
+  if(!containerEl) return;
+  containerEl.querySelectorAll('[data-tip]').forEach(el=>{
+    el.addEventListener('click', (e)=>{
+      e.stopPropagation();
+      mostraTooltipGrafico(el, el.dataset.tip, containerEl);
+    });
+  });
+}
+document.addEventListener('click', (e)=>{ if(!e.target.closest('.grafico-svg-cont')) nascondiTooltipGrafico(); });
 
 async function renderGrafici(){
   await caricaEsercizi();
@@ -881,7 +981,10 @@ async function renderGraficoSelezionato(){
   if(!esercizioId){ cont.innerHTML = '<div class="vuoto">Seleziona un esercizio</div>'; return; }
   const es = esercizioPerId(esercizioId);
   if(es?.traccia_rpe){
+    // La modalità "Sessione" non si applica agli esercizi RPE (Arrampicata): restano su settimana/mese.
     await renderGraficoRpe(esercizioId, es);
+  } else if(stato.periodoGrafico === 'sessione'){
+    await renderGraficoCaricoPerSessione(esercizioId, es);
   } else {
     await renderGraficoCarico(esercizioId);
   }
@@ -911,12 +1014,16 @@ async function renderGraficoCarico(esercizioId){
 
   cont.innerHTML = `
     <h3 style="font-size:14px; color:var(--magnesite-attenuata); margin:6px 0;">Carico massimo per sessione</h3>
-    <div id="graficoCarico"></div>
+    <div id="graficoCarico" class="grafico-svg-cont"></div>
     <h3 style="font-size:14px; color:var(--magnesite-attenuata); margin:14px 0 6px;">Volume totale (peso × serie × ripetizioni)</h3>
-    <div id="graficoVolume"></div>
+    <div id="graficoVolume" class="grafico-svg-cont"></div>
   `;
-  document.getElementById('graficoCarico').innerHTML = svgBarre(chiaviOrdinate, mappa, 'caricoMax', bucketCorrente, 'kg', bucket);
-  document.getElementById('graficoVolume').innerHTML = svgBarre(chiaviOrdinate, mappa, 'volume', bucketCorrente, 'kg', bucket);
+  const elCarico = document.getElementById('graficoCarico');
+  const elVolume = document.getElementById('graficoVolume');
+  elCarico.innerHTML = svgBarre(chiaviOrdinate, mappa, 'caricoMax', bucketCorrente, 'kg', bucket);
+  elVolume.innerHTML = svgBarre(chiaviOrdinate, mappa, 'volume', bucketCorrente, 'kg', bucket);
+  attivaTooltipGrafico(elCarico);
+  attivaTooltipGrafico(elVolume);
 }
 
 const MESI_ABBREV = ['gen','feb','mar','apr','mag','giu','lug','ago','set','ott','nov','dic'];
@@ -976,12 +1083,13 @@ function svgBarre(chiavi, mappa, campo, bucketCorrente, unita, bucket){
     const etichettaValore = `${formatEtichettaBucket(k, bucket)}: ${formatNumero(v)}${unita?' '+unita:''}`;
     barre += `<rect x="${x+2}" y="${y}" width="${larghezzaBarra-4}" height="${h}" rx="3"
       fill="${parziale ? 'transparent' : 'var(--arancio, #E8622C)'}"
-      stroke="var(--arancio, #E8622C)" stroke-width="${parziale?1.5:0}" stroke-dasharray="${parziale?'4,3':'0'}"><title>${etichettaValore}</title></rect>`;
+      stroke="var(--arancio, #E8622C)" stroke-width="${parziale?1.5:0}" stroke-dasharray="${parziale?'4,3':'0'}"
+      data-tip="${escapeHtml(etichettaValore)}"></rect>`;
     if(indiciEtichette.has(i)){
       barre += `<text x="${x+larghezzaBarra/2}" y="${altezza-6}" text-anchor="middle" class="etichetta-parziale">${formatEtichettaBucket(k, bucket)}</text>`;
     }
   });
-  const notaParziale = chiavi.includes(bucketCorrente) ? `<div style="font-size:11px; color:var(--magnesite-attenuata); margin-top:4px;">Il periodo tratteggiato è ancora in corso. Passa il mouse sulle barre per il valore esatto.</div>` : `<div style="font-size:11px; color:var(--magnesite-attenuata); margin-top:4px;">Passa il mouse sulle barre per il valore esatto.</div>`;
+  const notaParziale = chiavi.includes(bucketCorrente) ? `<div style="font-size:11px; color:var(--magnesite-attenuata); margin-top:4px;">Il periodo tratteggiato è ancora in corso. Tocca una barra per il valore esatto.</div>` : `<div style="font-size:11px; color:var(--magnesite-attenuata); margin-top:4px;">Tocca una barra per il valore esatto.</div>`;
   return `<svg class="grafico-svg" viewBox="0 0 ${larghezza} ${altezza}">${assiY}${barre}</svg>${notaParziale}`;
 }
 
@@ -1026,9 +1134,11 @@ async function renderGraficoRpe(esercizioId, es){
     ${conSpecialita ? `<div style="display:flex; gap:12px; margin-bottom:8px; flex-wrap:wrap;">
       ${SPECIALITA_ARRAMPICATA.map(s=>`<div style="display:flex; align-items:center; gap:5px; font-size:12px; color:var(--magnesite-attenuata);"><span style="width:10px; height:10px; border-radius:50%; background:${s.colore}; display:inline-block;"></span>${s.etichetta}</div>`).join('')}
     </div>` : ''}
-    <div id="graficoRpe"></div>
+    <div id="graficoRpe" class="grafico-svg-cont"></div>
   `;
-  document.getElementById('graficoRpe').innerHTML = svgLineeRpe(chiaviOrdinate, mappaPerGruppo, gruppi, bucketCorrente, bucket);
+  const elRpe = document.getElementById('graficoRpe');
+  elRpe.innerHTML = svgLineeRpe(chiaviOrdinate, mappaPerGruppo, gruppi, bucketCorrente, bucket);
+  attivaTooltipGrafico(elRpe);
 }
 
 function svgLineeRpe(chiavi, mappaPerGruppo, gruppi, bucketCorrente, bucket){
@@ -1090,13 +1200,157 @@ function svgLineeRpe(chiavi, mappaPerGruppo, gruppi, bucketCorrente, bucket){
       const parziale = p.chiave === bucketCorrente;
       const etichettaValore = `${formatEtichettaBucket(p.chiave, bucket)}${g.etichetta ? ' · '+g.etichetta : ''}: RPE ${formatNumero(p.media)}`;
       return `<circle cx="${xPer(p.i)}" cy="${yPer(p.media)}" r="${parziale?3:4}"
-        fill="${parziale ? 'transparent' : g.colore}" stroke="${g.colore}" stroke-width="${parziale?1.5:0}"><title>${etichettaValore}</title></circle>`;
+        fill="${parziale ? 'transparent' : g.colore}" stroke="${g.colore}" stroke-width="${parziale?1.5:0}"
+        data-tip="${escapeHtml(etichettaValore)}"></circle>`;
     }).join('');
     serie += linee + cerchi;
   });
 
-  const notaParziale = chiavi.includes(bucketCorrente) ? `<div style="font-size:11px; color:var(--magnesite-attenuata); margin-top:4px;">Il periodo tratteggiato è ancora in corso. Passa il mouse sui punti per il valore esatto.</div>` : `<div style="font-size:11px; color:var(--magnesite-attenuata); margin-top:4px;">Passa il mouse sui punti per il valore esatto.</div>`;
+  const notaParziale = chiavi.includes(bucketCorrente) ? `<div style="font-size:11px; color:var(--magnesite-attenuata); margin-top:4px;">Il periodo tratteggiato è ancora in corso. Tocca un punto per il valore esatto.</div>` : `<div style="font-size:11px; color:var(--magnesite-attenuata); margin-top:4px;">Tocca un punto per il valore esatto.</div>`;
   return `<svg class="grafico-svg" viewBox="0 0 ${larghezza} ${altezza}">${assiY}${serie}${etichetteX}</svg>${notaParziale}`;
+}
+
+/* ============================================================
+   GRAFICO "PER SESSIONE" (una barra per ogni sessione loggata,
+   invece di aggregare per settimana/mese).
+
+   Due varianti, a seconda del flag esercizi.sottrai_peso_corporeo:
+   - true (oggi solo Trazioni): il campo peso registrato è la ZAVORRA.
+     Si ricostruisce il totale (zavorra + peso corporeo alla data) e si
+     mostra Intensità (%RM, asse da 60%=corpo libero) + Volume, entrambi
+     calcolati sul totale. Le sessioni precedenti alla storicizzazione
+     di Tmax/peso corporeo sono marcate come stima (tratteggio).
+   - false (tutti gli altri esercizi a carico): il campo peso è il totale
+     come sempre. Si mostra Carico (peso puro) con asse min/max calcolato
+     automaticamente dal range storico di quell'esercizio (nessun numero
+     manuale), + Volume.
+   ============================================================ */
+function svgBarreSessione(punti, opts){
+  const n = Math.max(punti.length, 1);
+  const larghezza = Math.max(320, n*40+50), altezza = 150;
+  const paddingLeft=42, paddingRight=6, paddingBottom=28, paddingTop=12;
+  const areaGrafico = altezza-paddingTop-paddingBottom;
+  const larghezzaDisponibile = larghezza-paddingLeft-paddingRight;
+  const larghezzaBarra = larghezzaDisponibile/n;
+  const min = opts.min, max = opts.max>opts.min ? opts.max : opts.min+1;
+  const scalaY = v => altezza-paddingBottom - ((v-min)/(max-min))*areaGrafico;
+
+  let assiY = '';
+  opts.righeGuida.forEach(v=>{
+    const y = scalaY(v);
+    assiY += `<line x1="${paddingLeft}" y1="${y}" x2="${larghezza-paddingRight}" y2="${y}" stroke="var(--magnesite, #F2EFE9)" stroke-width="0.5" stroke-opacity="0.2" />`;
+    assiY += `<text x="${paddingLeft-6}" y="${y+3}" text-anchor="end" class="etichetta-parziale">${opts.formattaEtichettaY ? opts.formattaEtichettaY(v) : formatNumero(Math.round(v))}</text>`;
+  });
+
+  const targetEtichette = Math.min(punti.length, 6);
+  const indiciEtichette = new Set();
+  if(punti.length){
+    if(targetEtichette<=1) indiciEtichette.add(0);
+    else for(let j=0;j<targetEtichette;j++) indiciEtichette.add(Math.round(j*(punti.length-1)/(targetEtichette-1)));
+  }
+
+  let barre = '';
+  punti.forEach((p,i)=>{
+    const valoreClamped = Math.max(p.valore, min);
+    const h = Math.max(2, scalaY(min) - scalaY(valoreClamped));
+    const x = paddingLeft + i*larghezzaBarra;
+    const y = scalaY(valoreClamped);
+    const testoTip = `${p.etichetta}: ${formatNumero(p.valore)}${opts.unita?' '+opts.unita:''}${p.stima?' (stima)':''}`;
+    barre += `<rect x="${x+2}" y="${y}" width="${larghezzaBarra-4}" height="${h}" rx="3"
+      fill="${p.stima ? 'transparent' : 'var(--arancio, #E8622C)'}"
+      stroke="var(--arancio, #E8622C)" stroke-width="${p.stima?1.3:0}" stroke-dasharray="${p.stima?'3,3':'0'}"
+      data-tip="${escapeHtml(testoTip)}"></rect>`;
+    if(indiciEtichette.has(i)){
+      barre += `<text x="${x+larghezzaBarra/2}" y="${altezza-6}" text-anchor="middle" class="etichetta-parziale">${p.etichetta}</text>`;
+    }
+  });
+  return `<svg class="grafico-svg-sessione" viewBox="0 0 ${larghezza} ${altezza}" width="${larghezza}" height="${altezza}">${assiY}${barre}</svg>`;
+}
+
+async function renderGraficoCaricoPerSessione(esercizioId, es){
+  const cont = document.getElementById('contenutoGrafici');
+  cont.innerHTML = '<div class="vuoto">Caricamento…</div>';
+  const r = await conRetry(()=> sb.from('log_sessioni').select('data, peso, serie, ripetizioni').eq('eliminato', false).eq('esercizio_id', esercizioId).order('data'));
+  const log = (r.data || []).filter(l=>l.peso!=null);
+  if(log.length===0){ cont.innerHTML = '<div class="vuoto">Nessun dato registrato per questo esercizio.</div>'; return; }
+
+  const LIMITE = 30; // ultime N sessioni mostrate: con storici lunghi (es. Trazioni, 100+) evita un grafico enorme
+  const totaleSessioni = log.length;
+  const logVisibile = log.slice(-LIMITE);
+  const notaLimite = totaleSessioni>LIMITE ? `<div style="font-size:11px; color:var(--magnesite-attenuata); margin-top:2px;">Mostrate le ultime ${LIMITE} sessioni su ${totaleSessioni}.</div>` : '';
+
+  if(es?.sottrai_peso_corporeo){
+    const storico = await caricaConfigStorico();
+    const cfg = await caricaConfig();
+    let cisonoStime = false;
+    const puntiRm = [], puntiVol = [];
+    for(const l of logVisibile){
+      const tmaxInfo = valoreStoricoADATA(storico, 'tmax', l.data, cfg.tmax);
+      const pesoInfo = valoreStoricoADATA(storico, 'peso', l.data, cfg.peso);
+      const stima = tmaxInfo.stima || pesoInfo.stima;
+      if(stima) cisonoStime = true;
+      const totale = (pesoInfo.valore ?? 0) + l.peso;
+      const etichetta = formattaBreve(l.data);
+      if(tmaxInfo.valore!=null && tmaxInfo.valore>0){
+        puntiRm.push({ etichetta, valore: (totale/tmaxInfo.valore)*100, stima });
+      }
+      puntiVol.push({ etichetta, valore: totale*(l.serie||0)*(l.ripetizioni||0), stima });
+    }
+    const maxRmDati = puntiRm.length ? Math.max(...puntiRm.map(p=>p.valore)) : 100;
+    const tettoRm = Math.max(100, Math.ceil(maxRmDati/10)*10);
+    const righeGuidaRm = [];
+    for(let v=60; v<=tettoRm; v+=10) righeGuidaRm.push(v);
+    const maxVol = Math.max(1, ...puntiVol.map(p=>p.valore));
+
+    cont.innerHTML = `
+      <h3 style="font-size:14px; color:var(--magnesite-attenuata); margin:6px 0;">Intensità (%RM), per sessione</h3>
+      <div class="scroll-grafico"><div id="graficoRmSessione" class="grafico-svg-cont"></div></div>
+      <h3 style="font-size:14px; color:var(--magnesite-attenuata); margin:14px 0 6px;">Volume totale, per sessione</h3>
+      <div class="scroll-grafico"><div id="graficoVolSessione" class="grafico-svg-cont"></div></div>
+      <div style="font-size:11px; color:var(--magnesite-attenuata); margin-top:6px;">${cisonoStime ? 'Tratteggio = stima (Tmax/peso corporeo di oggi, non ancora storicizzati a quella data). ' : ''}Tocca una barra per il valore esatto.</div>
+      ${notaLimite}
+    `;
+    const elRm = document.getElementById('graficoRmSessione');
+    elRm.innerHTML = puntiRm.length
+      ? svgBarreSessione(puntiRm, { min:60, max:tettoRm, unita:'%', righeGuida: righeGuidaRm, formattaEtichettaY:v=>v+'%' })
+      : '<div class="vuoto">Tmax non impostato: imposta Tmax in Impostazioni per vedere il %RM.</div>';
+    attivaTooltipGrafico(elRm);
+    const elVol = document.getElementById('graficoVolSessione');
+    elVol.innerHTML = svgBarreSessione(puntiVol, { min:0, max:maxVol, unita:'kg', righeGuida:[0, maxVol/2, maxVol] });
+    attivaTooltipGrafico(elVol);
+  } else {
+    // Esercizi a carico "normali": peso puro, asse min/max calcolato dal range storico dell'esercizio
+    // (niente numeri a mano: se un giorno sfondi un record, l'asse si allarga da solo).
+    const pesi = logVisibile.map(l=>l.peso);
+    const minPeso = Math.min(...pesi), maxPeso = Math.max(...pesi);
+    let baseAsse, tettoAsse;
+    if(minPeso === maxPeso){
+      baseAsse = Math.max(0, minPeso*0.8);
+      tettoAsse = maxPeso*1.2 || 1;
+    } else {
+      const margine = (maxPeso-minPeso)*0.15;
+      baseAsse = Math.max(0, minPeso-margine);
+      tettoAsse = maxPeso+margine;
+    }
+    const puntiPeso = logVisibile.map(l=>({ etichetta:formattaBreve(l.data), valore:l.peso, stima:false }));
+    const puntiVol = logVisibile.map(l=>({ etichetta:formattaBreve(l.data), valore:l.peso*(l.serie||0)*(l.ripetizioni||0), stima:false }));
+    const maxVol = Math.max(1, ...puntiVol.map(p=>p.valore));
+
+    cont.innerHTML = `
+      <h3 style="font-size:14px; color:var(--magnesite-attenuata); margin:6px 0;">Carico, per sessione</h3>
+      <div class="scroll-grafico"><div id="graficoPesoSessione" class="grafico-svg-cont"></div></div>
+      <h3 style="font-size:14px; color:var(--magnesite-attenuata); margin:14px 0 6px;">Volume totale, per sessione</h3>
+      <div class="scroll-grafico"><div id="graficoVolSessione" class="grafico-svg-cont"></div></div>
+      <div style="font-size:11px; color:var(--magnesite-attenuata); margin-top:6px;">Tocca una barra per il valore esatto.</div>
+      ${notaLimite}
+    `;
+    const elPeso = document.getElementById('graficoPesoSessione');
+    elPeso.innerHTML = svgBarreSessione(puntiPeso, { min:baseAsse, max:tettoAsse, unita:'kg', righeGuida:[baseAsse, (baseAsse+tettoAsse)/2, tettoAsse] });
+    attivaTooltipGrafico(elPeso);
+    const elVol = document.getElementById('graficoVolSessione');
+    elVol.innerHTML = svgBarreSessione(puntiVol, { min:0, max:maxVol, unita:'kg', righeGuida:[0, maxVol/2, maxVol] });
+    attivaTooltipGrafico(elVol);
+  }
 }
 
 /* ============================================================
@@ -1297,11 +1551,13 @@ async function salvaModificheSettimane(macrociclo){
 }
 
 async function gestisciSedutaFatta(macrociclo, s, sed){
-  const kg = sed.kg_calcolato_snapshot;
+  // Il Diario ora registra la zavorra (non più il totale corpo+zavorra), quindi precompiliamo
+  // con zavorra_calcolata_snapshot invece di kg_calcolato_snapshot.
+  const zavorra = sed.zavorra_calcolata_snapshot;
   apriModale(`
     <h2>Conferma sessione: Trazioni (settimana ${s.numero_settimana})</h2>
     <div class="riga-form"><label for="mfData">Data</label><input type="date" id="mfData" value="${oggiISO()}"></div>
-    <div class="riga-form"><label for="mfPeso">Peso (kg)</label><input type="number" step="0.5" id="mfPeso" value="${kg ?? ''}"></div>
+    <div class="riga-form"><label for="mfPeso">Zavorra (kg)</label><input type="number" step="0.5" id="mfPeso" value="${zavorra ?? ''}"></div>
     <div class="riga-form"><label for="mfSerie">Serie</label><input type="number" id="mfSerie" value="${sed.serie ?? ''}"></div>
     <div class="riga-form"><label for="mfRipetizioni">Ripetizioni</label><input type="number" id="mfRipetizioni" value="${sed.ripetizioni ?? ''}"></div>
     <div class="riga-form"><label for="mfNota">Nota (opzionale)</label><textarea id="mfNota"></textarea></div>
@@ -1632,6 +1888,11 @@ async function apriImpostazioni(){
     const smax = parseFloat(document.getElementById('cSmax').value) || null;
     const peso = parseFloat(document.getElementById('cPeso').value) || null;
     await conRetry(()=> sb.from('config').update({tmax, smax, peso}).eq('id',1));
+    // Storicizza questi valori come validi da oggi in poi (per i grafici %RM di Trazioni).
+    // Se si salva più volte lo stesso giorno, l'ultima sovrascrive semplicemente la voce di oggi.
+    await conRetry(()=> sb.from('config_storico').upsert({data: oggiISO(), tmax, smax, peso}, {onConflict:'data'}));
+    stato.config = null;
+    stato.configStorico = null;
     chiudiModale();
   };
   document.getElementById('cScaricaJson').onclick = async ()=>{
