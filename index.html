@@ -1218,10 +1218,10 @@ async function renderGraficoCaricoMese(esercizioId, es, chiaveMese){
       ${eSimulabile ? `
       <div style="margin-top:14px; padding:10px; border:1px solid var(--ardesia-bordo); border-radius:8px;">
         <h3 style="font-size:14px; color:var(--magnesite-attenuata); margin:0 0 8px;">Simula una sessione</h3>
-        <div style="display:flex; gap:8px;">
-          <div class="riga-form" style="flex:1; margin-bottom:0;"><label for="simSerie">Serie</label><input type="number" min="1" id="simSerie" value="${sim?.serie ?? ''}"></div>
-          <div class="riga-form" style="flex:1; margin-bottom:0;"><label for="simRip">Ripetizioni</label><input type="number" min="1" id="simRip" value="${sim?.ripetizioni ?? ''}"></div>
-          <div class="riga-form" style="flex:1; margin-bottom:0;"><label for="simInt">Intensità (%RM)</label><input type="number" min="1" step="1" id="simInt" value="${sim?.intensita ?? ''}"></div>
+        <div style="display:flex; flex-wrap:wrap; gap:8px;">
+          <div class="riga-form" style="flex:0 0 62px; margin-bottom:0;"><label for="simSerie">Serie</label><input type="number" min="1" id="simSerie" style="width:100%; min-width:0; padding-left:6px; padding-right:6px;" value="${sim?.serie ?? ''}"></div>
+          <div class="riga-form" style="flex:0 0 62px; margin-bottom:0;"><label for="simRip">Rip.</label><input type="number" min="1" id="simRip" style="width:100%; min-width:0; padding-left:6px; padding-right:6px;" value="${sim?.ripetizioni ?? ''}"></div>
+          <div class="riga-form" style="flex:1 1 110px; min-width:110px; margin-bottom:0;"><label for="simInt">Intensità (%RM)</label><input type="number" min="1" step="1" id="simInt" value="${sim?.intensita ?? ''}"></div>
         </div>
         ${!cfg.tmax ? '<div style="font-size:11px; color:var(--magnesite-attenuata); margin-top:8px;">Imposta Tmax in Impostazioni per usare il simulatore.</div>' : ''}
         <div style="display:flex; gap:8px; margin-top:8px;">
