@@ -133,6 +133,51 @@ textarea{resize:vertical; min-height:60px;}
 }
 .badge.scheda{background:var(--muschio);}
 
+/* Macrociclo: calcolatore zavorra + agenda Trazioni a pillole */
+.calcolatore-zavorra{
+  background:var(--ardesia-alta); border:1px solid var(--ardesia-bordo);
+  border-radius:var(--radius); margin-bottom:16px; overflow:hidden;
+}
+.calcolatore-zavorra .cz-header{
+  display:flex; justify-content:space-between; align-items:center;
+  padding:12px 14px; cursor:pointer;
+}
+.calcolatore-zavorra .cz-titolo{font-family:var(--font-display); font-size:16px; font-weight:600;}
+.calcolatore-zavorra .cz-base{font-size:11px; color:var(--magnesite-attenuata); margin-top:2px;}
+.calcolatore-zavorra .cz-chevron{color:var(--magnesite-attenuata); font-size:12px; transition:transform 0.15s;}
+.calcolatore-zavorra.chiuso .cz-chevron{transform:rotate(180deg);}
+.calcolatore-zavorra.chiuso .cz-body{display:none;}
+.cz-body{
+  display:grid; grid-template-columns:repeat(3,1fr); gap:1px;
+  background:var(--ardesia-bordo); border-top:1px solid var(--ardesia-bordo);
+}
+.cz-cella{background:var(--ardesia-alta); padding:9px 6px; text-align:center;}
+.cz-cella .cz-perc{font-size:11px; color:var(--magnesite-attenuata); margin-bottom:2px;}
+.cz-cella .cz-val{font-family:var(--font-display); font-size:19px; font-weight:600;}
+.cz-cella .cz-unita{font-size:10px; color:var(--magnesite-attenuata); margin-left:2px;}
+
+.agenda-trazioni{
+  background:var(--ardesia-alta); border:1px solid var(--ardesia-bordo);
+  border-radius:var(--radius); padding:2px 14px;
+}
+.riga-settimana-agenda{
+  display:flex; align-items:center; justify-content:space-between; gap:10px;
+  padding:12px 0; border-bottom:1px solid var(--ardesia-bordo);
+}
+.riga-settimana-agenda:last-child{border-bottom:none;}
+.riga-settimana-agenda .rsa-data{font-size:13px; color:var(--magnesite-attenuata); flex-shrink:0;}
+.riga-settimana-agenda.corrente .rsa-data{color:var(--magnesite); font-weight:600;}
+.rsa-pillole{display:flex; gap:6px; flex:1; justify-content:flex-end; min-width:0;}
+.pillola-agenda{
+  border-radius:20px; padding:6px 12px; font-size:12px; max-width:150px;
+  overflow:hidden; text-overflow:ellipsis; white-space:nowrap;
+  border:1px solid var(--ardesia-bordo); background:transparent; color:var(--magnesite-attenuata);
+  font-family:var(--font-body); cursor:pointer;
+}
+.pillola-agenda.vuota{border-style:dashed;}
+.pillola-agenda.pianificata{border-color:var(--arancio); color:var(--magnesite); background:rgba(232,98,44,0.12);}
+.pillola-agenda.fatta{border-color:var(--muschio); color:var(--magnesite); background:rgba(91,122,110,0.18);}
+
 .vuoto{
   text-align:center; color:var(--magnesite-attenuata); padding:32px 12px; font-size:14px;
 }
@@ -302,10 +347,10 @@ textarea{resize:vertical; min-height:60px;}
     </div>
   </section>
 
-  <!-- ============ VISTA 4: MACROCICLO (ex Scheda, ora dedicata a Trazioni) ============ -->
+  <!-- ============ VISTA 4: MACROCICLO (agenda Trazioni a pillole + calcolatore zavorra) ============ -->
   <section class="vista" id="vista-scheda">
-    <div id="selettoreMacrociclo" style="margin-bottom:12px;"></div>
-    <div id="contenutoMacrociclo"><div class="vuoto">Caricamento…</div></div>
+    <div id="selettoreMacrociclo"><div class="vuoto">Caricamento…</div></div>
+    <div id="contenutoMacrociclo"></div>
   </section>
 
   <!-- ============ VISTA 5: LIBRERIA ============ -->
@@ -439,7 +484,8 @@ const stato = {
   esercizi: [],
   categorie: [],
   filtroLibreria: 'attivi',
-  macrocicloSelezionatoId: null,
+  numeroSettimanePassateCaricate: 8, // agenda Macrociclo: quante settimane passate sono attualmente visibili
+  calcolatoreZavorraAperto: true,
   offsetMeseGrafico: 0, // 0 = mese corrente, negativo = indietro nel tempo
   config: null,          // cache riga config (tmax/smax/peso attuali), invalidata al salvataggio in Impostazioni
   configStorico: null,   // cache config_storico (tmax/smax/peso storicizzati per data), invalidata al salvataggio
@@ -1219,276 +1265,207 @@ async function renderGraficoRpeMese(esercizioId, es, chiaveMese){
 }
 
 /* ============================================================
-   VISTA 4 — MACROCICLO (dedicata a Trazioni)
-   Sostituisce la vecchia Scheda a pianificazione settimanale generica.
-   Un macrociclo definisce N settimane consecutive con percentuale/serie/
-   ripetizioni per Trazioni; il kg totale e la zavorra netta si ricalcolano
-   ogni volta che salvi modifiche (finché la settimana non è "fatta",
-   poi restano congelati come lo storico del Diario).
+   VISTA 4 — MACROCICLO (agenda Trazioni a pillole + calcolatore zavorra)
+   Sostituisce il vecchio sistema a macrocicli/settimane/sedute (tabelle
+   lasciate intatte ma non più referenziate). Due parti indipendenti:
+   1) Calcolatore zavorra: 70→95% calcolati al volo da tmax/peso corporeo
+      (config), nessun dato proprio, nessuna migration.
+   2) Agenda: una riga per settimana (lunedì di riferimento), due "pillole"
+      fisse per settimana (slot A/B). Nessuna data del giorno esatto:
+      solo nota libera + stato fatto/pianificato/vuoto. Segnare una pillola
+      come "fatta" crea (una sola volta) una riga nel Diario collegata
+      tramite log_id; l'eventuale sessione nel Diario non viene mai toccata
+      da modifiche/eliminazioni successive dell'agenda.
    ============================================================ */
 async function renderScheda(){
   await caricaEsercizi();
   const esTrazioni = stato.esercizi.find(e=>e.nome==='Trazioni' && !e.archiviato);
-  const contSel = document.getElementById('selettoreMacrociclo');
-  const cont = document.getElementById('contenutoMacrociclo');
+  const contCalcolatore = document.getElementById('selettoreMacrociclo');
+  const contAgenda = document.getElementById('contenutoMacrociclo');
   if(!esTrazioni){
-    contSel.innerHTML = '';
-    cont.innerHTML = '<div class="vuoto">Esercizio "Trazioni" non trovato (o archiviato) in Libreria.</div>';
+    contCalcolatore.innerHTML = '';
+    contAgenda.innerHTML = '<div class="vuoto">Esercizio "Trazioni" non trovato (o archiviato) in Libreria.</div>';
     return;
   }
-  cont.innerHTML = '<div class="vuoto">Caricamento…</div>';
-  const r = await conRetry(()=> sb.from('macrocicli').select('*').eq('esercizio_id', esTrazioni.id).order('data_inizio', {ascending:false}));
-  const cicli = r.data || [];
-  if(!stato.macrocicloSelezionatoId || !cicli.some(c=>c.id===stato.macrocicloSelezionatoId)){
-    stato.macrocicloSelezionatoId = cicli[0]?.id || null;
-  }
-  contSel.innerHTML = `
-    <div style="display:flex; gap:8px; align-items:center;">
-      <select id="selMacrociclo" style="flex:1;" ${cicli.length===0?'disabled':''}>
-        ${cicli.length===0 ? '<option>Nessun macrociclo</option>' : cicli.map(m=>`<option value="${m.id}" ${m.id===stato.macrocicloSelezionatoId?'selected':''}>${escapeHtml(m.nome || 'Macrociclo')} — dal ${formattaBreve(m.data_inizio)}</option>`).join('')}
-      </select>
-      <button class="btn secondario" id="btnNuovoMacrociclo">+ Nuovo</button>
-    </div>
-  `;
-  document.getElementById('btnNuovoMacrociclo').onclick = ()=> apriFormMacrociclo(esTrazioni.id);
-  if(cicli.length===0){
-    cont.innerHTML = '<div class="vuoto">Nessun macrociclo creato. Creane uno per pianificare le Trazioni su più settimane.</div>';
-    return;
-  }
-  document.getElementById('selMacrociclo').addEventListener('change', (e)=>{ stato.macrocicloSelezionatoId = e.target.value; renderDettaglioMacrociclo(); });
-  await renderDettaglioMacrociclo();
+  const config = await caricaConfig();
+  renderCalcolatoreZavorra(contCalcolatore, esTrazioni, config);
+  await renderAgendaTrazioni(contAgenda, esTrazioni);
 }
 
-async function renderDettaglioMacrociclo(){
-  const cont = document.getElementById('contenutoMacrociclo');
-  cont.innerHTML = '<div class="vuoto">Caricamento…</div>';
-  const rM = await conRetry(()=> sb.from('macrocicli').select('*').eq('id', stato.macrocicloSelezionatoId).single());
-  const macrociclo = rM.data;
-  const rS = await conRetry(()=> sb.from('macrociclo_settimane').select('*').eq('macrociclo_id', macrociclo.id).order('numero_settimana'));
-  const settimane = rS.data || [];
-  const idsSettimane = settimane.map(s=>s.id);
-  const rSed = idsSettimane.length
-    ? await conRetry(()=> sb.from('macrociclo_sedute').select('*').in('settimana_id', idsSettimane).order('numero_seduta'))
-    : { data: [] };
-  const sedute = rSed.data || [];
-  const oggi = oggiISO();
+/* ---- Calcolatore zavorra: 70→95%, step 5, sola lettura ---- */
+function renderCalcolatoreZavorra(cont, esTrazioni, config){
+  const percentuali = [70,75,80,85,90,95];
+  const usaZavorra = !!esTrazioni.sottrai_peso_corporeo;
+  const base = usaZavorra
+    ? `1RM ${config.tmax ?? '—'} kg · corporeo ${config.peso ?? '—'} kg`
+    : `1RM ${config.tmax ?? '—'} kg`;
+  const celle = percentuali.map(p=>{
+    let testo = '—';
+    if(config.tmax != null){
+      const kgTotali = config.tmax * p / 100;
+      const valore = (usaZavorra && config.peso != null) ? (kgTotali - config.peso) : kgTotali;
+      const arrotondato = Math.round(valore*10)/10;
+      testo = (usaZavorra && arrotondato>0 ? '+' : '') + arrotondato;
+    }
+    return `<div class="cz-cella"><div class="cz-perc">${p}%</div><div class="cz-val">${testo}<span class="cz-unita">kg</span></div></div>`;
+  }).join('');
+  const chiuso = stato.calcolatoreZavorraAperto ? '' : 'chiuso';
   cont.innerHTML = `
-    <div class="card">
-      <h3 style="margin:0 0 4px;">${escapeHtml(macrociclo.nome || 'Macrociclo')}</h3>
-      <div style="font-size:12px; color:var(--magnesite-attenuata); margin-bottom:10px;">${macrociclo.durata_settimane} settimane, dal ${formattaBreve(macrociclo.data_inizio)}</div>
-      <div id="righeSettimane"></div>
-      <div class="errore-box" id="mErrore" style="display:none;"></div>
-      <div style="display:flex; gap:8px; margin-top:12px;">
-        <button class="btn secondario" style="flex:1" id="btnEliminaMacrociclo">Elimina macrociclo</button>
-        <button class="btn primario" style="flex:1" id="btnSalvaMacrociclo">Salva modifiche</button>
+    <div class="calcolatore-zavorra ${chiuso}" id="calcolatoreZavorra">
+      <div class="cz-header" id="czHeader">
+        <div>
+          <div class="cz-titolo">Calcolatore zavorra</div>
+          <div class="cz-base">${base}</div>
+        </div>
+        <span class="cz-chevron">&#9650;</span>
       </div>
+      <div class="cz-body">${celle}</div>
     </div>
   `;
-  const contRighe = document.getElementById('righeSettimane');
-  contRighe.innerHTML = settimane.map(s=>{
-    const inizio = aggiungiGiorni(macrociclo.data_inizio, (s.numero_settimana-1)*7);
-    const fine = aggiungiGiorni(inizio, 6);
-    const corrente = oggi>=inizio && oggi<=fine;
-    const seduteSettimana = sedute.filter(sed=>sed.settimana_id===s.id);
-    const qualcunaFatta = seduteSettimana.some(sed=>sed.fatta);
-    const disabilitaRiposo = qualcunaFatta ? 'disabled' : '';
-    const seduteHtml = seduteSettimana.map(sed=>{
-      const disabilita = sed.fatta ? 'disabled' : '';
-      return `
-      <div style="border-top:1px solid var(--ardesia-bordo); padding:8px 0;">
-        <div style="display:flex; gap:6px; margin-bottom:6px; align-items:flex-end;">
-          <div style="flex:1; min-width:0;">
-            <label style="display:block; font-size:11px; color:var(--magnesite-attenuata); margin-bottom:2px;">%</label>
-            <input type="number" step="0.5" class="input-percentuale" data-id="${sed.id}" value="${sed.percentuale ?? ''}" ${disabilita} style="width:100%;">
-          </div>
-          <div style="flex:1; min-width:0;">
-            <label style="display:block; font-size:11px; color:var(--magnesite-attenuata); margin-bottom:2px;">Serie</label>
-            <input type="number" class="input-serie" data-id="${sed.id}" value="${sed.serie ?? ''}" ${disabilita} style="width:100%;">
-          </div>
-          <div style="flex:1; min-width:0;">
-            <label style="display:block; font-size:11px; color:var(--magnesite-attenuata); margin-bottom:2px;">Rip.</label>
-            <input type="number" class="input-ripetizioni" data-id="${sed.id}" value="${sed.ripetizioni ?? ''}" ${disabilita} style="width:100%;">
-          </div>
-          ${!sed.fatta ? `<button class="icona-btn" data-id="${sed.id}" data-azione="rimuovi-seduta" aria-label="Rimuovi seduta">&#128465;</button>` : ''}
-        </div>
-        <div style="display:flex; justify-content:space-between; align-items:center;">
-          <span style="font-size:12px; color:var(--magnesite-attenuata);">${sed.kg_calcolato_snapshot!=null ? `${sed.kg_calcolato_snapshot} kg totali${sed.zavorra_calcolata_snapshot!=null ? ` · zavorra ${sed.zavorra_calcolata_snapshot} kg` : ''}` : 'da calcolare'}</span>
-          <label style="display:flex; align-items:center; gap:6px; font-size:13px;">
-            <input type="checkbox" class="check-fatta-seduta" data-id="${sed.id}" ${sed.fatta?'checked':''} ${sed.fatta?'disabled':''}> fatta
-          </label>
+  document.getElementById('czHeader').onclick = ()=>{
+    const el = document.getElementById('calcolatoreZavorra');
+    el.classList.toggle('chiuso');
+    stato.calcolatoreZavorraAperto = !el.classList.contains('chiuso');
+  };
+}
+
+/* ---- Agenda: elenco di lunedì (1 futuro, oggi, N passati) ---- */
+function elencoSettimaneAgenda(numeroPassate){
+  const lunediOggi = lunediSettimana(oggiISO());
+  const lista = [aggiungiGiorni(lunediOggi, 7), lunediOggi];
+  for(let i=1; i<=numeroPassate; i++) lista.push(aggiungiGiorni(lunediOggi, -7*i));
+  return lista;
+}
+
+function pillolaAgendaHtml(settimanaInizio, slot, riga){
+  if(!riga){
+    return `<button class="pillola-agenda vuota" data-settimana="${settimanaInizio}" data-slot="${slot}">+ ${slot}</button>`;
+  }
+  const classe = riga.fatto ? 'fatta' : 'pianificata';
+  const spunta = riga.fatto ? '&#10003; ' : '';
+  const testo = riga.nota ? escapeHtml(riga.nota) : `Allenamento ${slot}`;
+  return `<button class="pillola-agenda ${classe}" data-settimana="${settimanaInizio}" data-slot="${slot}">${spunta}${testo}</button>`;
+}
+
+async function renderAgendaTrazioni(cont, esTrazioni){
+  cont.innerHTML = '<div class="vuoto">Caricamento…</div>';
+  const settimane = elencoSettimaneAgenda(stato.numeroSettimanePassateCaricate);
+  const piuVecchia = settimane[settimane.length-1];
+  const r = await conRetry(()=> sb.from('macrociclo_agenda').select('*').gte('settimana_inizio', piuVecchia));
+  const righe = r.data || [];
+  const lunediOggi = lunediSettimana(oggiISO());
+
+  const html = settimane.map(settimanaInizio=>{
+    const fine = aggiungiGiorni(settimanaInizio, 6);
+    const corrente = settimanaInizio === lunediOggi;
+    const rigaA = righe.find(x=>x.settimana_inizio===settimanaInizio && x.slot==='A');
+    const rigaB = righe.find(x=>x.settimana_inizio===settimanaInizio && x.slot==='B');
+    return `
+      <div class="riga-settimana-agenda ${corrente?'corrente':''}">
+        <div class="rsa-data">${formattaBreve(settimanaInizio)}–${formattaBreve(fine)}</div>
+        <div class="rsa-pillole">
+          ${pillolaAgendaHtml(settimanaInizio,'A',rigaA)}
+          ${pillolaAgendaHtml(settimanaInizio,'B',rigaB)}
         </div>
       </div>`;
-    }).join('');
-    return `
-    <div style="border-top:2px solid var(--ardesia-bordo); padding:10px 0;">
-      <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:6px;">
-        <strong style="font-size:13px; ${corrente?'color:var(--arancio);':''}">Settimana ${s.numero_settimana}${corrente?' · in corso':''}</strong>
-        <span style="font-size:12px; color:var(--magnesite-attenuata);">${formattaBreve(inizio)}–${formattaBreve(fine)}</span>
-      </div>
-      <label style="display:flex; align-items:center; gap:6px; font-size:12px; color:var(--magnesite-attenuata); margin-bottom:4px;">
-        <input type="checkbox" class="check-riposo" data-id="${s.id}" ${s.riposo?'checked':''} ${disabilitaRiposo}> Settimana di riposo
-      </label>
-      <div class="blocco-sedute-settimana" data-id="${s.id}" style="display:${s.riposo?'none':'block'};">
-        ${seduteHtml}
-        <button class="btn secondario" data-id="${s.id}" data-azione="aggiungi-seduta" style="width:100%; margin-top:8px; font-size:13px;">+ Aggiungi seduta</button>
-      </div>
-      <div class="etichetta-riposo" data-id="${s.id}" style="display:${s.riposo?'block':'none'}; font-size:12px; color:var(--magnesite-attenuata); padding:2px 0;">Settimana di scarico, nessuna seduta pianificata.</div>
-    </div>`;
   }).join('');
 
-  contRighe.querySelectorAll('.check-riposo').forEach(chkRiposo=>{
-    chkRiposo.addEventListener('change', (e)=>{
-      const id = e.target.dataset.id;
-      const mostraSedute = !e.target.checked;
-      contRighe.querySelector(`.blocco-sedute-settimana[data-id="${id}"]`).style.display = mostraSedute ? 'block' : 'none';
-      contRighe.querySelector(`.etichetta-riposo[data-id="${id}"]`).style.display = mostraSedute ? 'none' : 'block';
+  cont.innerHTML = `
+    <div class="agenda-trazioni">${html}</div>
+    <button class="btn secondario blocco" id="btnCaricaAltreSettimane" style="margin-top:10px;">Carica altre settimane</button>
+  `;
+
+  cont.querySelectorAll('.pillola-agenda').forEach(p=>{
+    p.addEventListener('click', ()=>{
+      const settimanaInizio = p.dataset.settimana;
+      const slot = p.dataset.slot;
+      const riga = righe.find(x=>x.settimana_inizio===settimanaInizio && x.slot===slot);
+      apriFormPillolaAgenda(esTrazioni, settimanaInizio, slot, riga);
     });
   });
-  contRighe.querySelectorAll('.check-fatta-seduta').forEach(chk=>{
-    chk.addEventListener('change', (e)=>{
-      if(e.target.checked){
-        const sed = sedute.find(x=>x.id===e.target.dataset.id);
-        const s = settimane.find(x=>x.id===sed.settimana_id);
-        gestisciSedutaFatta(macrociclo, s, sed);
-      }
-    });
-  });
-  contRighe.querySelectorAll('[data-azione="aggiungi-seduta"]').forEach(btn=>{
-    btn.addEventListener('click', async ()=>{
-      const settimanaId = btn.dataset.id;
-      const seduteEsistenti = sedute.filter(sed=>sed.settimana_id===settimanaId);
-      const prossimoNumero = seduteEsistenti.length ? Math.max(...seduteEsistenti.map(x=>x.numero_seduta))+1 : 1;
-      await conRetry(()=> sb.from('macrociclo_sedute').insert({settimana_id: settimanaId, numero_seduta: prossimoNumero, percentuale:70, serie:3, ripetizioni:8}));
-      renderDettaglioMacrociclo();
-    });
-  });
-  contRighe.querySelectorAll('[data-azione="rimuovi-seduta"]').forEach(btn=>{
-    btn.addEventListener('click', async ()=>{
-      await conRetry(()=> sb.from('macrociclo_sedute').delete().eq('id', btn.dataset.id));
-      renderDettaglioMacrociclo();
-    });
-  });
-  document.getElementById('btnSalvaMacrociclo').onclick = ()=> salvaModificheSettimane(macrociclo);
-  document.getElementById('btnEliminaMacrociclo').onclick = ()=>{
-    confermaGenerica(`Eliminare "${macrociclo.nome||'questo macrociclo'}"? Le sessioni già registrate nel Diario restano intatte, si perde solo il piano.`, 'Elimina', async ()=>{
-      await conRetry(()=> sb.from('macrocicli').delete().eq('id', macrociclo.id));
-      stato.macrocicloSelezionatoId = null;
-      renderScheda();
-    });
+  document.getElementById('btnCaricaAltreSettimane').onclick = ()=>{
+    stato.numeroSettimanePassateCaricate += 8;
+    renderAgendaTrazioni(cont, esTrazioni);
   };
 }
 
-async function salvaModificheSettimane(macrociclo){
-  const erroreBox = document.getElementById('mErrore');
-  erroreBox.style.display='none';
-  try{
-    const rConfig = await conRetry(()=> sb.from('config').select('*').eq('id',1).single());
-    const config = rConfig.data || {};
-    const esTrazioni = esercizioPerId(macrociclo.esercizio_id);
-
-    // Settimane: salva il flag riposo; se una settimana passa a riposo, elimina le sue sedute non ancora fatte
-    const checkRiposi = [...document.querySelectorAll('.check-riposo')];
-    for(const chkRiposo of checkRiposi){
-      if(chkRiposo.disabled) continue; // c'è già una seduta fatta questa settimana: non si può passare a riposo
-      const settimanaId = chkRiposo.dataset.id;
-      await conRetry(()=> sb.from('macrociclo_settimane').update({riposo: chkRiposo.checked}).eq('id', settimanaId));
-      if(chkRiposo.checked){
-        await conRetry(()=> sb.from('macrociclo_sedute').delete().eq('settimana_id', settimanaId).eq('fatta', false));
-      }
-    }
-
-    // Sedute: ricalcola percentuale/serie/ripetizioni/kg/zavorra per quelle non ancora fatte
-    const inputPercentuali = [...document.querySelectorAll('.input-percentuale')];
-    for(const inputPerc of inputPercentuali){
-      if(inputPerc.disabled) continue; // seduta già fatta: non toccarla
-      const id = inputPerc.dataset.id;
-      const percentuale = parseFloat(inputPerc.value) || null;
-      const serie = parseInt(document.querySelector(`.input-serie[data-id="${id}"]`).value) || null;
-      const ripetizioni = parseInt(document.querySelector(`.input-ripetizioni[data-id="${id}"]`).value) || null;
-      const kg = (config.tmax!=null && percentuale!=null) ? Math.round((config.tmax*percentuale/100)*10)/10 : null;
-      const zavorra = (esTrazioni?.sottrai_peso_corporeo && kg!=null && config.peso!=null) ? Math.round((kg-config.peso)*10)/10 : null;
-      await conRetry(()=> sb.from('macrociclo_sedute').update({
-        percentuale, serie, ripetizioni, kg_calcolato_snapshot: kg, zavorra_calcolata_snapshot: zavorra
-      }).eq('id', id).eq('fatta', false));
-    }
-    renderDettaglioMacrociclo();
-  }catch(e){ erroreBox.textContent = 'Errore: '+(e.message||e); erroreBox.style.display='block'; }
-}
-
-async function gestisciSedutaFatta(macrociclo, s, sed){
-  // Il Diario ora registra la zavorra (non più il totale corpo+zavorra), quindi precompiliamo
-  // con zavorra_calcolata_snapshot invece di kg_calcolato_snapshot.
-  const zavorra = sed.zavorra_calcolata_snapshot;
+/* ---- Form di una singola pillola: nota libera + eventuale log nel Diario ---- */
+function apriFormPillolaAgenda(esTrazioni, settimanaInizio, slot, riga){
+  const fine = aggiungiGiorni(settimanaInizio, 6);
   apriModale(`
-    <h2>Conferma sessione: Trazioni (settimana ${s.numero_settimana})</h2>
-    <div class="riga-form"><label for="mfData">Data</label><input type="date" id="mfData" value="${oggiISO()}"></div>
-    <div class="riga-form"><label for="mfPeso">Zavorra (kg)</label><input type="number" step="0.5" id="mfPeso" value="${zavorra ?? ''}"></div>
-    <div class="riga-form"><label for="mfSerie">Serie</label><input type="number" id="mfSerie" value="${sed.serie ?? ''}"></div>
-    <div class="riga-form"><label for="mfRipetizioni">Ripetizioni</label><input type="number" id="mfRipetizioni" value="${sed.ripetizioni ?? ''}"></div>
-    <div class="riga-form"><label for="mfNota">Nota (opzionale)</label><textarea id="mfNota"></textarea></div>
-    <div class="errore-box" id="mfErrore" style="display:none;"></div>
+    <h2>Allenamento ${slot} — ${formattaBreve(settimanaInizio)}–${formattaBreve(fine)}</h2>
+    <div class="riga-form">
+      <label for="paNota">Nota</label>
+      <input type="text" id="paNota" placeholder="Es. 4×5 @ +18kg" value="${riga?.nota ? escapeHtml(riga.nota) : ''}">
+    </div>
+    <label style="display:flex; align-items:center; gap:6px; font-size:14px; margin-bottom:12px;">
+      <input type="checkbox" id="paFatto" ${riga?.fatto ? 'checked' : ''}> Segna come fatta
+    </label>
+    <div id="blocRegistraLog">
+      <div class="riga-form"><label for="paPeso">Zavorra (kg)</label><input type="number" step="0.5" id="paPeso"></div>
+      <div class="riga-form"><label for="paSerie">Serie</label><input type="number" id="paSerie"></div>
+      <div class="riga-form"><label for="paRipetizioni">Ripetizioni</label><input type="number" id="paRipetizioni"></div>
+    </div>
+    <div class="errore-box" id="paErrore" style="display:none;"></div>
     <div style="display:flex; gap:8px;">
-      <button class="btn secondario" style="flex:1" id="mfAnnulla">Annulla</button>
-      <button class="btn primario" style="flex:1" id="mfConferma">Conferma</button>
+      ${riga ? '<button class="btn pericolo" style="flex:1" id="paElimina">Svuota</button>' : '<button class="btn secondario" style="flex:1" id="paAnnulla">Annulla</button>'}
+      <button class="btn primario" style="flex:1" id="paSalva">Salva</button>
     </div>
   `);
-  document.getElementById('mfAnnulla').onclick = ()=>{ chiudiModale(); renderDettaglioMacrociclo(); };
-  document.getElementById('mfConferma').onclick = async ()=>{
-    const erroreBox = document.getElementById('mfErrore');
-    const payload = {
-      esercizio_id: macrociclo.esercizio_id,
-      data: document.getElementById('mfData').value,
-      origine: 'da_scheda',
-      nota: document.getElementById('mfNota').value.trim() || null,
-      peso: parseFloat(document.getElementById('mfPeso').value) || null,
-      serie: parseInt(document.getElementById('mfSerie').value) || null,
-      ripetizioni: parseInt(document.getElementById('mfRipetizioni').value) || null,
-      fatto: true,
+
+  const chkFatto = document.getElementById('paFatto');
+  const blocLog = document.getElementById('blocRegistraLog');
+  const aggiornaBloccoLog = ()=>{
+    blocLog.style.display = (chkFatto.checked && !riga?.log_id) ? 'block' : 'none';
+  };
+  aggiornaBloccoLog();
+  chkFatto.addEventListener('change', aggiornaBloccoLog);
+
+  if(riga){
+    document.getElementById('paElimina').onclick = ()=>{
+      confermaGenerica('Svuotare questo allenamento? Se era collegata una sessione nel Diario, resta intatta lì.', 'Svuota', async ()=>{
+        await conRetry(()=> sb.from('macrociclo_agenda').delete().eq('id', riga.id));
+        chiudiModale();
+        renderScheda();
+      });
     };
-    try{
-      const ins = await conRetry(()=> sb.from('log_sessioni').insert(payload).select().single());
-      await conRetry(()=> sb.from('macrociclo_sedute').update({fatta:true, log_id: ins.data.id}).eq('id', sed.id));
-      chiudiModale();
-      renderDettaglioMacrociclo();
-    }catch(e){ erroreBox.textContent = 'Errore: '+(e.message||e); erroreBox.style.display='block'; }
-  };
-}
+  } else {
+    document.getElementById('paAnnulla').onclick = chiudiModale;
+  }
 
-function apriFormMacrociclo(esercizioId){
-  apriModale(`
-    <h2>Nuovo macrociclo — Trazioni</h2>
-    <div class="riga-form"><label for="mcNome">Nome (opzionale)</label><input type="text" id="mcNome" placeholder="Es. Blocco estate"></div>
-    <div class="riga-form"><label for="mcInizio">Data inizio</label><input type="date" id="mcInizio" value="${oggiISO()}"></div>
-    <div class="riga-form"><label for="mcDurata">Durata (settimane)</label><input type="number" id="mcDurata" min="1" max="52" value="8"></div>
-    <div class="errore-box" id="mcErrore" style="display:none;"></div>
-    <div style="display:flex; gap:8px;">
-      <button class="btn secondario" style="flex:1" id="mcAnnulla">Annulla</button>
-      <button class="btn primario" style="flex:1" id="mcSalva">Crea</button>
-    </div>
-  `);
-  document.getElementById('mcAnnulla').onclick = chiudiModale;
-  document.getElementById('mcSalva').onclick = async ()=>{
-    const erroreBox = document.getElementById('mcErrore');
-    const nome = document.getElementById('mcNome').value.trim() || null;
-    const dataInizio = document.getElementById('mcInizio').value;
-    const durata = parseInt(document.getElementById('mcDurata').value);
-    if(!dataInizio || !durata || durata<1){
-      erroreBox.textContent = 'Inserisci data inizio e durata valide.'; erroreBox.style.display='block'; return;
-    }
+  document.getElementById('paSalva').onclick = async ()=>{
+    const erroreBox = document.getElementById('paErrore');
+    const nota = document.getElementById('paNota').value.trim() || null;
+    const fatto = chkFatto.checked;
     try{
-      const ins = await conRetry(()=> sb.from('macrocicli').insert({esercizio_id: esercizioId, nome, data_inizio: dataInizio, durata_settimane: durata}).select().single());
-      const macrocicloId = ins.data.id;
-      const settimaneDaCreare = Array.from({length:durata}, (_,i)=>({macrociclo_id: macrocicloId, numero_settimana: i+1}));
-      const insS = await conRetry(()=> sb.from('macrociclo_settimane').insert(settimaneDaCreare).select());
-      const settimaneCreate = insS.data || [];
-      const seduteDaCreare = settimaneCreate.map(s=>({settimana_id: s.id, numero_seduta: 1, percentuale: 70, serie: 3, ripetizioni: 8}));
-      if(seduteDaCreare.length) await conRetry(()=> sb.from('macrociclo_sedute').insert(seduteDaCreare));
+      let logId = null;
+      if(fatto){
+        logId = riga?.log_id || null;
+        if(!logId){
+          const payload = {
+            esercizio_id: esTrazioni.id,
+            data: oggiISO(),
+            origine: 'da_scheda',
+            nota,
+            peso: parseFloat(document.getElementById('paPeso').value) || null,
+            serie: parseInt(document.getElementById('paSerie').value) || null,
+            ripetizioni: parseInt(document.getElementById('paRipetizioni').value) || null,
+            fatto: true,
+          };
+          const ins = await conRetry(()=> sb.from('log_sessioni').insert(payload).select().single());
+          logId = ins.data.id;
+        }
+      }
+      await conRetry(()=> sb.from('macrociclo_agenda').upsert(
+        { settimana_inizio: settimanaInizio, slot, nota, fatto, log_id: logId },
+        { onConflict: 'settimana_inizio,slot' }
+      ));
       chiudiModale();
-      stato.macrocicloSelezionatoId = macrocicloId;
       renderScheda();
     }catch(e){ erroreBox.textContent = 'Errore: '+(e.message||e); erroreBox.style.display='block'; }
   };
 }
+
 
 /* ============================================================
    VISTA 5 — LIBRERIA ESERCIZI
