@@ -489,6 +489,7 @@ const stato = {
   offsetMeseGrafico: 0, // 0 = mese corrente, negativo = indietro nel tempo
   config: null,          // cache riga config (tmax/smax/peso attuali), invalidata al salvataggio in Impostazioni
   configStorico: null,   // cache config_storico (tmax/smax/peso storicizzati per data), invalidata al salvataggio
+  simTrazioni: null,     // { serie, ripetizioni, intensita } — simulazione "fantasma" solo per il grafico Trazioni, mai salvata su DB
 };
 
 /* Config attuale (tmax/smax/peso corporeo) e relativo storico, con cache semplice
@@ -1097,8 +1098,9 @@ function giornoDelMese(iso){
 
 function svgBarreMese(punti, opts){
   const giorniMese = opts.giorniMese;
+  const largSim = opts.simulato ? 24 : 0; // spazio extra a destra per la barra simulata, subito dopo l'ultima reale
   const larghezza = 340, altezza = 150;
-  const paddingLeft=42, paddingRight=10, paddingBottom=28, paddingTop=12;
+  const paddingLeft=42, paddingRight=10+largSim, paddingBottom=28, paddingTop=12;
   const areaGrafico = altezza-paddingTop-paddingBottom;
   const larghezzaDisponibile = larghezza-paddingLeft-paddingRight;
   const xPerGiorno = g => giorniMese>1 ? paddingLeft + ((g-1)/(giorniMese-1))*larghezzaDisponibile : paddingLeft + larghezzaDisponibile/2;
@@ -1138,6 +1140,20 @@ function svgBarreMese(punti, opts){
       barre += `<text x="${xPerGiorno(p.giorno)}" y="${altezza-6}" text-anchor="middle" class="etichetta-parziale">${p.etichetta}</text>`;
     }
   });
+
+  if(opts.simulato){
+    const s = opts.simulato;
+    const valoreClamped = Math.max(s.valore, min);
+    const h = Math.max(2, scalaY(min) - scalaY(valoreClamped));
+    const ultimoGiorno = punti.length ? punti[punti.length-1].giorno : giorniMese/2;
+    const xBarra = xPerGiorno(ultimoGiorno) + larghezzaBarra + 8; // poco spazio, solo per non sovrapporle
+    const y = scalaY(valoreClamped);
+    const testoTip = `Simulazione: ${formatNumero(s.valore)}${opts.unita?' '+opts.unita:''}`;
+    barre += `<rect x="${xBarra-larghezzaBarra/2}" y="${y}" width="${larghezzaBarra}" height="${h}" rx="2.5"
+      fill="#8A6FA3"
+      data-tip="${escapeHtml(testoTip)}"></rect>`;
+  }
+
   return `<svg class="grafico-svg" viewBox="0 0 ${larghezza} ${altezza}">${assiY}${barre}</svg>`;
 }
 
@@ -1175,11 +1191,23 @@ async function renderGraficoCaricoMese(esercizioId, es, chiaveMese){
       }
       puntiVol.push({ etichetta, giorno, valore: totale*(l.serie||0)*(l.ripetizioni||0), stima });
     }
-    const maxRmDati = puntiRm.length ? Math.max(...puntiRm.map(p=>p.valore)) : 100;
+
+    // Simulatore "barra fantasma" (solo Trazioni): serie × ripetizioni × intensità (%RM) inseriti
+    // a mano da Gabriele, mai salvati su DB. Usa il Tmax attuale (di oggi), non lo storico.
+    const eSimulabile = es.nome === 'Trazioni';
+    const sim = eSimulabile ? stato.simTrazioni : null;
+    let simRm = null, simVol = null;
+    if(sim && cfg.tmax){
+      const totaleSim = cfg.tmax * (sim.intensita/100);
+      simRm = { valore: sim.intensita };
+      simVol = { valore: totaleSim * sim.serie * sim.ripetizioni };
+    }
+
+    const maxRmDati = Math.max(puntiRm.length ? Math.max(...puntiRm.map(p=>p.valore)) : 100, simRm?.valore ?? 0);
     const tettoRm = Math.max(100, Math.ceil(maxRmDati/10)*10);
     const righeGuidaRm = [];
     for(let v=60; v<=tettoRm; v+=10) righeGuidaRm.push(v);
-    const maxVol = Math.max(1, ...puntiVol.map(p=>p.valore));
+    const maxVol = Math.max(1, ...puntiVol.map(p=>p.valore), simVol?.valore ?? 0);
 
     cont.innerHTML = `
       <h3 style="font-size:14px; color:var(--magnesite-attenuata); margin:6px 0;">Intensità (%RM), per sessione</h3>
@@ -1187,15 +1215,45 @@ async function renderGraficoCaricoMese(esercizioId, es, chiaveMese){
       <h3 style="font-size:14px; color:var(--magnesite-attenuata); margin:14px 0 6px;">Volume totale, per sessione</h3>
       <div id="graficoVolSessione" class="grafico-svg-cont"></div>
       <div style="font-size:11px; color:var(--magnesite-attenuata); margin-top:6px;">${cisonoStime ? 'Tratteggio = stima (Tmax/peso corporeo di oggi, non ancora storicizzati a quella data). ' : ''}Tocca una barra per il valore esatto.</div>
+      ${eSimulabile ? `
+      <div style="margin-top:14px; padding:10px; border:1px solid var(--ardesia-bordo); border-radius:8px;">
+        <h3 style="font-size:14px; color:var(--magnesite-attenuata); margin:0 0 8px;">Simula una sessione</h3>
+        <div style="display:flex; gap:8px;">
+          <div class="riga-form" style="flex:1; margin-bottom:0;"><label for="simSerie">Serie</label><input type="number" min="1" id="simSerie" value="${sim?.serie ?? ''}"></div>
+          <div class="riga-form" style="flex:1; margin-bottom:0;"><label for="simRip">Ripetizioni</label><input type="number" min="1" id="simRip" value="${sim?.ripetizioni ?? ''}"></div>
+          <div class="riga-form" style="flex:1; margin-bottom:0;"><label for="simInt">Intensità (%RM)</label><input type="number" min="1" step="1" id="simInt" value="${sim?.intensita ?? ''}"></div>
+        </div>
+        ${!cfg.tmax ? '<div style="font-size:11px; color:var(--magnesite-attenuata); margin-top:8px;">Imposta Tmax in Impostazioni per usare il simulatore.</div>' : ''}
+        <div style="display:flex; gap:8px; margin-top:8px;">
+          <button class="btn primario" style="flex:1" id="btnSimula" ${!cfg.tmax?'disabled':''}>Simula</button>
+          ${sim ? '<button class="btn secondario" id="btnSimulaCancella">Cancella</button>' : ''}
+        </div>
+      </div>` : ''}
     `;
     const elRm = document.getElementById('graficoRmSessione');
-    elRm.innerHTML = puntiRm.length
-      ? svgBarreMese(puntiRm, { min:60, max:tettoRm, unita:'%', righeGuida: righeGuidaRm, formattaEtichettaY:v=>v+'%', giorniMese })
+    elRm.innerHTML = (puntiRm.length || simRm)
+      ? svgBarreMese(puntiRm, { min:60, max:tettoRm, unita:'%', righeGuida: righeGuidaRm, formattaEtichettaY:v=>v+'%', giorniMese, simulato: simRm })
       : '<div class="vuoto">Tmax non impostato: imposta Tmax in Impostazioni per vedere il %RM.</div>';
     attivaTooltipGrafico(elRm);
     const elVol = document.getElementById('graficoVolSessione');
-    elVol.innerHTML = svgBarreMese(puntiVol, { min:0, max:maxVol, unita:'kg', righeGuida:[0, maxVol/2, maxVol], giorniMese });
+    elVol.innerHTML = svgBarreMese(puntiVol, { min:0, max:maxVol, unita:'kg', righeGuida:[0, maxVol/2, maxVol], giorniMese, simulato: simVol });
     attivaTooltipGrafico(elVol);
+
+    if(eSimulabile){
+      document.getElementById('btnSimula').addEventListener('click', ()=>{
+        const serie = parseInt(document.getElementById('simSerie').value) || 0;
+        const ripetizioni = parseInt(document.getElementById('simRip').value) || 0;
+        const intensita = parseFloat(document.getElementById('simInt').value) || 0;
+        if(!cfg.tmax || serie<=0 || ripetizioni<=0 || intensita<=0) return;
+        stato.simTrazioni = { serie, ripetizioni, intensita };
+        renderGraficoSelezionato();
+      });
+      const btnCancella = document.getElementById('btnSimulaCancella');
+      if(btnCancella) btnCancella.addEventListener('click', ()=>{
+        stato.simTrazioni = null;
+        renderGraficoSelezionato();
+      });
+    }
   } else {
     // Esercizi a carico "normali": peso puro, asse min/max calcolato dal range del mese
     // (niente numeri a mano: se un giorno sfondi un record, l'asse si allarga da solo).
